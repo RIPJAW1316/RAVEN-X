@@ -291,9 +291,6 @@ pytest tests/test_scanner.py
 ### AI Analysis
 ![AI Analysis](docs/screenshots/ai_analysis.png)
 
-### Reports
-![Reports](docs/screenshots/report.png)
-
 ---
 
 ## 🤝 Contributing
