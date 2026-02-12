@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # Backend API
+  raven-x-backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: raven-x-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=sqlite:///data/raven_x.db
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./logs:/app/logs
+      - ./ml_models:/app/ml_models
+    networks:
+      - raven-x-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL Database (optional - for production)
+  raven-x-postgres:
+    image: postgres:15-alpine
+    container_name: raven-x-postgres
+    environment:
+      - POSTGRES_DB=raven_x
+      - POSTGRES_USER=raven_admin
+      - POSTGRES_PASSWORD=change_me_in_production
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - raven-x-network
+    restart: unless-stopped
+    profiles:
+      - production
+
+  # Redis (for caching and task queue)
+  raven-x-redis:
+    image: redis:7-alpine
+    container_name: raven-x-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - raven-x-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # Nginx (reverse proxy)
+  raven-x-nginx:
+    image: nginx:alpine
+    container_name: raven-x-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./data/reports:/usr/share/nginx/html/reports:ro
+    networks:
+      - raven-x-network
+    depends_on:
+      - raven-x-backend
+    restart: unless-stopped
+    profiles:
+      - production
+
+networks:
+  raven-x-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

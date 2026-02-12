@@ -1,0 +1,158 @@
+# RAVEN-X Enterprise Configuration
+application:
+  name: "RAVEN-X Enterprise Security Platform"
+  version: "4.0.0"
+  environment: "production"
+  debug: false
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  reload: false
+  log_level: "info"
+
+database:
+  type: "sqlite"  # sqlite, postgresql
+  sqlite_path: "data/raven_x.db"
+  postgresql:
+    host: "localhost"
+    port: 5432
+    database: "raven_x"
+    username: "raven_admin"
+    password: "change_me_in_production"
+  pool_size: 20
+  max_overflow: 10
+  echo: false
+
+ai:
+  lm_studio:
+    url: "http://localhost:1234/v1"
+    model: "llama-3.1-8b-instruct-q4_k_m"
+    timeout: 120
+    max_tokens: 4000
+    temperature: 0.7
+  
+  ml_models:
+    malware_classifier: "ml_models/malware_classifier/model.pkl"
+    anomaly_detector: "ml_models/anomaly_detector/model.pkl"
+    threat_pattern: "ml_models/threat_patterns/model.pkl"
+  
+  learning:
+    auto_learn: true
+    confidence_threshold: 0.85
+    retrain_interval_hours: 24
+    min_samples_for_retrain: 100
+
+scanning:
+  default_scan_type: "full"
+  max_concurrent_scans: 3
+  scan_timeout_minutes: 30
+  
+  modules:
+    windows_updates: true
+    firewall: true
+    antivirus: true
+    network_security: true
+    file_integrity: true
+    malware_detection: true
+    behavioral_monitoring: true
+    registry_analysis: true
+    service_analysis: true
+    
+  advanced:
+    deep_scan: true
+    memory_scan: true
+    rootkit_detection: true
+    zero_day_heuristics: true
+
+remediation:
+  auto_fix_enabled: false  # Safe mode by default
+  create_restore_point: true
+  backup_before_fix: true
+  max_auto_fixes_per_run: 10
+  require_confirmation: true
+  
+  categories:
+    critical: "prompt"  # prompt, auto, manual
+    high: "prompt"
+    medium: "manual"
+    low: "manual"
+
+monitoring:
+  real_time_enabled: true
+  behavioral_analysis: true
+  network_monitoring: true
+  file_system_monitoring: true
+  process_monitoring: true
+  
+  intervals:
+    quick_check_seconds: 60
+    full_scan_hours: 24
+    update_check_hours: 6
+
+threat_intelligence:
+  enabled: true
+  sources:
+    - type: "virustotal"
+      enabled: false
+      api_key: ""
+    - type: "malwarebazaar"
+      enabled: true
+      api_key: ""
+    - type: "abuse_ch"
+      enabled: true
+  
+  update_interval_hours: 12
+  cache_duration_hours: 48
+
+reporting:
+  formats: ["html", "json", "csv", "pdf"]
+  default_format: "html"
+  auto_export: true
+  export_path: "data/reports/"
+  
+  compliance_standards:
+    - "CIS Benchmarks"
+    - "NIST CSF"
+    - "ISO 27001"
+    - "PCI DSS"
+
+security:
+  api_key_required: false
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 60
+  
+  encryption:
+    enabled: true
+    algorithm: "AES-256"
+  
+  audit_logging: true
+
+performance:
+  cache_enabled: true
+  cache_ttl_seconds: 3600
+  max_memory_mb: 2048
+  optimize_for_speed: true
+
+notifications:
+  enabled: true
+  channels:
+    email: false
+    webhook: false
+    desktop: true
+  
+  triggers:
+    critical_vulnerability: true
+    scan_complete: true
+    fix_applied: true
+    system_anomaly: true
+
+logging:
+  level: "INFO"
+  format: "json"
+  file_path: "logs/raven_x.log"
+  max_file_size_mb: 100
+  backup_count: 10
+  console_output: true
