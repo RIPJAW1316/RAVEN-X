@@ -342,7 +342,7 @@ This software is provided for educational and authorized security testing purpos
 
 ## 👥 Authors
 
-- **Your Name** - *Lead Developer*
+- **Your Name** - *K Aryan Reddy*
 
 ---
 
@@ -371,4 +371,4 @@ If RAVEN-X helped you, please ⭐ star this repository!
 
 © 2025 RAVEN-X Enterprise. All rights reserved.
 
-</div>
+</div>
