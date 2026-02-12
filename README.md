@@ -356,11 +356,7 @@ This software is provided for educational and authorized security testing purpos
 ---
 
 ## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/raven-x/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/raven-x/discussions)
-- **Email**: support@raven-x.com
-
+- **Email**: gtagamer1316@gmail.com
 ---
 
 ## ⭐ Star Us!
