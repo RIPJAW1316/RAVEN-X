@@ -11,7 +11,7 @@ import platform
 import socket
 from datetime import datetime
 
-from ...core.monitoring.behavioral_monitor import behavioral_monitor
+from ..core.monitoring.behavioral_monitoring import behavioral_monitor
 
 router = APIRouter()
 

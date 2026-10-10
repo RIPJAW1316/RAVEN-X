@@ -1,0 +1,23 @@
+# Reproducible Raven-X control-plane development/test environment.
+# Supported interpreter: Python >=3.11,<3.14.  Python 3.14 is not supported
+# until all optional native and AI dependencies have been validated there.
+fastapi==0.118.0
+uvicorn==0.38.0
+SQLAlchemy==2.0.45
+aiosqlite==0.21.0
+PyYAML==6.0.3
+Jinja2==3.1.6
+httpx==0.28.1
+# The historical requirements capture pins 2.10.0, but the configured package
+# index does not publish that release.  2.11.0 is available there and supports
+# the existing OpenAI client API without the 1.30.x/httpx 0.28 ``proxies`` bug.
+openai==2.11.0
+pydantic==2.12.5
+pytest==9.0.2
+cryptography==50.0.2
+numpy==2.3.5
+pandas==2.3.3
+scikit-learn==1.7.2
+psutil==7.1.0
+customtkinter==6.0.0
+pywin32==312

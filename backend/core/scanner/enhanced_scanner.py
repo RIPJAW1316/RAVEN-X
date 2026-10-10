@@ -32,42 +32,51 @@ class EnhancedScanner:
     - Zero-day heuristics
     """
     
+    # This scanner was introduced as a backend-oriented successor to the
+    # legacy scanner.py implementation.  Only checks with a concrete
+    # implementation in this file are enabled here.  The legacy-only and
+    # placeholder checks are deliberately retained as metadata so callers can
+    # distinguish them from executable backend capabilities.
+    MODULE_STATUS = {
+        'windows_updates': ('implemented', 'check_windows_updates'),
+        'firewall': ('placeholder', 'check_firewall'),
+        'antivirus': ('placeholder', 'check_antivirus'),
+        'uac': ('legacy-only', None),
+        'auto_login': ('legacy-only', None),
+        'remote_desktop': ('legacy-only', None),
+        'admin_accounts': ('legacy-only', None),
+        'open_ports': ('legacy-only', None),
+        'network_sharing': ('legacy-only', None),
+        'wifi_security': ('legacy-only', None),
+        'dns_settings': ('legacy-only', None),
+        'bitlocker': ('legacy-only', None),
+        'password_policy': ('legacy-only', None),
+        'audit_policy': ('legacy-only', None),
+        'outdated_software': ('not-implemented', None),
+        'startup_programs': ('legacy-only', None),
+        'powershell_policy': ('legacy-only', None),
+        'smb_protocol': ('legacy-only', None),
+        'services': ('legacy-only', None),
+        'file_integrity': ('legacy-only', None),
+        'memory_scan': ('implemented', 'check_memory_threats'),
+        'rootkit_detection': ('placeholder', 'check_rootkits'),
+        'registry_analysis': ('implemented', 'deep_registry_analysis'),
+        'dll_hijacking': ('placeholder', 'check_dll_hijacking'),
+        'privilege_escalation': ('implemented', 'check_privilege_escalation_vectors'),
+        'lateral_movement': ('placeholder', 'check_lateral_movement_risks'),
+        'data_exfiltration': ('placeholder', 'check_data_exfiltration_risks'),
+        'malware_signatures': ('implemented', 'scan_for_malware'),
+    }
+
     def __init__(self):
         self.vulnerabilities = []
         self.system_info = {}
         self.scan_id = None
         
-        # Scan modules (all your current checks + more)
         self.modules = {
-            'windows_updates': self.check_windows_updates,
-            'firewall': self.check_firewall,
-            'antivirus': self.check_antivirus,
-            'uac': self.check_uac,
-            'auto_login': self.check_auto_login,
-            'remote_desktop': self.check_remote_desktop,
-            'admin_accounts': self.check_admin_accounts,
-            'open_ports': self.check_open_ports,
-            'network_sharing': self.check_network_sharing,
-            'wifi_security': self.check_wifi_security,
-            'dns_settings': self.check_dns_settings,
-            'bitlocker': self.check_bitlocker_status,
-            'password_policy': self.check_password_policy,
-            'audit_policy': self.check_audit_policy,
-            'outdated_software': self.check_outdated_software,
-            'startup_programs': self.check_startup_programs,
-            'powershell_policy': self.check_powershell_execution_policy,
-            'smb_protocol': self.check_smb_protocol,
-            'services': self.check_services,
-            'file_integrity': self.check_file_integrity,
-            # NEW ADVANCED MODULES
-            'memory_scan': self.check_memory_threats,
-            'rootkit_detection': self.check_rootkits,
-            'registry_analysis': self.deep_registry_analysis,
-            'dll_hijacking': self.check_dll_hijacking,
-            'privilege_escalation': self.check_privilege_escalation_vectors,
-            'lateral_movement': self.check_lateral_movement_risks,
-            'data_exfiltration': self.check_data_exfiltration_risks,
-            'malware_signatures': self.scan_for_malware,
+            name: getattr(self, method_name)
+            for name, (status, method_name) in self.MODULE_STATUS.items()
+            if status == 'implemented' and method_name
         }
         
         logger.info("🔍 Enhanced Scanner initialized with {} modules".format(len(self.modules)))

@@ -1,2756 +1,1741 @@
 """
-RAVEN-X: Rapid AI Vulnerability and Exploitation Nexus
-AI-Powered Windows Vulnerability Scanner with Local LLM (LM Studio)
-Professional Corporate UI Edition v3.0
+RAVEN-X ENTERPRISE: Rapid AI Vulnerability and Exploitation Nexus
+AI-Powered Windows Vulnerability Scanner v4.0 – Ultimate Edition
 
-IMPORTANT DISCLAIMER:
-This tool is for educational and authorized security testing purposes only.
-Always ensure you have proper authorization before scanning systems.
-Some fixes require administrator privileges and may modify system settings.
-
+DISCLAIMER: For authorized security testing only.
 Requires: pip install openai psutil pywin32 customtkinter
 """
 
 import tkinter as tk
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
-import subprocess
-import winreg
-import os
-import sys
-import psutil
-import json
-import socket
-import re
-import time
-import random
-import hashlib
-import csv
-import html
+from tkinter import filedialog, messagebox, ttk
+import subprocess, winreg, os, sys, psutil, json, socket, re
+import hashlib, csv, time, smtplib, sqlite3, html
 from datetime import datetime, timedelta
 from openai import OpenAI
-import threading
-import logging
-import tempfile
-import platform
-import uuid
-import webbrowser
+import threading, logging, tempfile, platform, uuid, webbrowser
 from collections import defaultdict
+import ctypes, pathlib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# Setup logging
+# ── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('raven_x_scan.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("raven_x.log"), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
+CONFIG_FILE  = "raven_x_config.json"
+DB_FILE      = "raven_x.db"
+
+# ── Compliance framework control mappings ──────────────────────────────────
+COMPLIANCE = {
+    "CIS": {
+        "Windows Update": ["CIS 1.1","CIS 1.2"], "Firewall": ["CIS 9.1","CIS 9.2","CIS 9.3"],
+        "Antivirus": ["CIS 8.1","CIS 8.2"], "User Account Control": ["CIS 2.3.17"],
+        "Authentication": ["CIS 1.1.1","CIS 5.1"], "Remote Access": ["CIS 18.8","CIS 18.9"],
+        "Network": ["CIS 9.1","CIS 9.2"], "Services": ["CIS 5.1","CIS 5.2"],
+        "Auditing": ["CIS 17.1","CIS 17.2"],
+    },
+    "NIST": {
+        "Windows Update": ["SI-2"], "Firewall": ["SC-7","AC-4"], "Antivirus": ["SI-3"],
+        "User Account Control": ["AC-6"], "Authentication": ["IA-2","IA-5"],
+        "Remote Access": ["AC-17"], "Network": ["SC-7","CM-7"],
+        "Services": ["CM-7"], "Auditing": ["AU-2","AU-12"],
+    },
+    "ISO 27001": {
+        "Windows Update": ["A.12.6.1"], "Firewall": ["A.13.1.3"], "Antivirus": ["A.12.2.1"],
+        "User Account Control": ["A.9.2.3"], "Authentication": ["A.9.2.1","A.9.4.3"],
+        "Remote Access": ["A.6.2.1"], "Network": ["A.13.1.1"],
+        "Services": ["A.12.5.1"], "Auditing": ["A.12.4.1"],
+    },
+    "PCI-DSS": {
+        "Windows Update": ["6.2"], "Firewall": ["1.1","1.2"], "Antivirus": ["5.1","5.2"],
+        "User Account Control": ["7.1","8.1"], "Authentication": ["8.2","8.3"],
+        "Remote Access": ["8.3"], "Network": ["1.3","2.2"],
+        "Services": ["2.2"], "Auditing": ["10.2","10.3"],
+    },
+}
+
+# CVSS base scores for known issue types
+CVSS_MAP = {
+    "SMBv1":9.8, "Real-time Protection Disabled":9.1, "Firewall Disabled":8.8,
+    "Guest Account Enabled":7.5, "RDP Network Level":7.5, "Tamper Protection":7.3,
+    "UAC Not Fully":7.0, "Weak Wi-Fi":6.5, "Automatic Login":6.5,
+    "Remote Desktop Enabled":5.9, "PowerShell Execution":5.5,
+    "Outdated Windows Updates":7.8, "BitLocker":7.2, "No Password Required":9.3,
+    "Defender Exclusion":8.5,
+}
+
+def cvss_for(vuln):
+    title = vuln.get("title","")
+    for k,v in CVSS_MAP.items():
+        if k.lower() in title.lower():
+            return v
+    return {"critical":9.0,"high":7.0,"medium":5.0,"low":3.0}.get(vuln.get("severity","low"),5.0)
+
+def is_admin():
+    try: return ctypes.windll.shell32.IsUserAnAdmin()
+    except: return False
+
+def run_ps(script, timeout=20):
+    """Run a PowerShell snippet; return parsed JSON dict/list or raw string."""
+    try:
+        r = subprocess.run(
+            ["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-Command", script],
+            capture_output=True, text=True, timeout=timeout
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            try: return json.loads(r.stdout)
+            except: return r.stdout.strip()
+    except Exception as e:
+        logger.error(f"PS error: {e}")
+    return None
+
+def html_esc(s):
+    return html.escape(str(s)) if s else ""
+
+# ══════════════════════════════════════════════════════════════════════════
+# DATABASE
+# ══════════════════════════════════════════════════════════════════════════
+class DB:
+    def __init__(self):
+        self.path = DB_FILE
+        conn = sqlite3.connect(self.path)
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS scans(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT UNIQUE,
+            ts TEXT, host TEXT, total INTEGER, critical INTEGER,
+            high INTEGER, medium INTEGER, low INTEGER,
+            risk_score REAL, duration REAL, scan_type TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS vulns(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT,
+            severity TEXT, category TEXT, title TEXT, details TEXT,
+            remediation TEXT, powershell_cmd TEXT,
+            cvss REAL, cis TEXT, nist TEXT, iso TEXT, pci TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS trends(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT,
+            host TEXT, risk_score REAL, total INTEGER,
+            critical INTEGER, high INTEGER)""")
+        conn.commit(); conn.close()
+
+    def save(self, data):
+        conn = sqlite3.connect(self.path); c = conn.cursor()
+        try:
+            c.execute("""INSERT OR REPLACE INTO scans
+                (scan_id,ts,host,total,critical,high,medium,low,risk_score,duration,scan_type)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (data["scan_id"],data["ts"],data["host"],data["total"],
+                 data["critical"],data["high"],data["medium"],data["low"],
+                 data["risk_score"],data["duration"],data.get("scan_type","full")))
+            for v in data["vulns"]:
+                ctrls = {fw: ",".join(COMPLIANCE.get(fw,{}).get(v.get("category",""),[]))
+                         for fw in ["CIS","NIST","ISO 27001","PCI-DSS"]}
+                c.execute("""INSERT INTO vulns
+                    (scan_id,severity,category,title,details,remediation,
+                     powershell_cmd,cvss,cis,nist,iso,pci)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (data["scan_id"],v.get("severity"),v.get("category"),
+                     v.get("title"),v.get("details"),v.get("remediation",""),
+                     v.get("powershell_command",""),cvss_for(v),
+                     ctrls["CIS"],ctrls["NIST"],ctrls["ISO 27001"],ctrls["PCI-DSS"]))
+            c.execute("INSERT INTO trends(date,host,risk_score,total,critical,high) VALUES(?,?,?,?,?,?)",
+                      (datetime.now().strftime("%Y-%m-%d"),data["host"],
+                       data["risk_score"],data["total"],data["critical"],data["high"]))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"DB save: {e}"); conn.rollback()
+        finally: conn.close()
+
+    def history(self, n=30):
+        conn = sqlite3.connect(self.path); c = conn.cursor()
+        c.execute("SELECT * FROM scans ORDER BY ts DESC LIMIT ?", (n,))
+        rows = c.fetchall(); conn.close(); return rows
+
+    def trends(self, days=30):
+        conn = sqlite3.connect(self.path); c = conn.cursor()
+        cutoff = (datetime.now()-timedelta(days=days)).strftime("%Y-%m-%d")
+        c.execute("""SELECT date,AVG(risk_score),AVG(total),AVG(critical),AVG(high)
+                     FROM trends WHERE date>=? GROUP BY date ORDER BY date""",(cutoff,))
+        rows = c.fetchall(); conn.close(); return rows
+
+    def compliance_history(self, fw="CIS", n=10):
+        # Returns raw vuln rows for compliance calculation from last n scans
+        conn = sqlite3.connect(self.path); c = conn.cursor()
+        c.execute("SELECT scan_id FROM scans ORDER BY ts DESC LIMIT ?", (n,))
+        ids = [r[0] for r in c.fetchall()]
+        if not ids: conn.close(); return []
+        placeholders = ",".join("?"*len(ids))
+        col = {"CIS":"cis","NIST":"nist","ISO 27001":"iso","PCI-DSS":"pci"}.get(fw,"cis")
+        c.execute(f"SELECT category,{col} FROM vulns WHERE scan_id IN ({placeholders})", ids)
+        rows = c.fetchall(); conn.close(); return rows
+
+    def calc_compliance(self, vulns, fw):
+        all_controls = set()
+        for controls in COMPLIANCE.get(fw,{}).values():
+            all_controls.update(controls)
+        failed = set()
+        for v in vulns:
+            cat = v.get("category","")
+            failed.update(COMPLIANCE.get(fw,{}).get(cat,[]))
+        total = len(all_controls); f = len(failed)
+        passed = total - f
+        score = round((passed/total*100) if total else 100, 1)
+        return {"total":total,"passed":passed,"failed":f,"score":score}
+
+# ══════════════════════════════════════════════════════════════════════════
+# EMAIL
+# ══════════════════════════════════════════════════════════════════════════
+class EmailManager:
+    def __init__(self, cfg): self.cfg = cfg
+
+    def _smtp(self):
+        s = smtplib.SMTP(self.cfg.get("smtp_server","smtp.gmail.com"),
+                         int(self.cfg.get("smtp_port",587)))
+        s.starttls()
+        s.login(self.cfg["smtp_user"], self.cfg["smtp_pass"])
+        return s
+
+    def send_report(self, scan_data, html_report, recipients):
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["From"]    = self.cfg["smtp_user"]
+            msg["To"]      = ", ".join(recipients)
+            msg["Subject"] = (f"RAVEN-X Report — {scan_data['host']} — "
+                              f"Risk {scan_data['risk_score']}%")
+            msg.attach(MIMEText(html_report,"html"))
+            with self._smtp() as s: s.send_message(msg)
+            logger.info("Report email sent"); return True
+        except Exception as e: logger.error(f"Email: {e}"); return False
+
+    def send_alert(self, scan_data, critical_vulns, recipients):
+        try:
+            body  = f"🚨 CRITICAL ALERT — {scan_data['host']}\n\n"
+            body += f"Risk Score : {scan_data['risk_score']}%\n"
+            body += f"Critical   : {len(critical_vulns)}\n\n"
+            for i,v in enumerate(critical_vulns,1):
+                body += f"{i}. {v['title']}\n   {v['details']}\n\n"
+            msg = MIMEMultipart()
+            msg["From"]    = self.cfg["smtp_user"]
+            msg["To"]      = ", ".join(recipients)
+            msg["Subject"] = f"🚨 {len(critical_vulns)} Critical Issues — {scan_data['host']}"
+            msg.attach(MIMEText(body,"plain"))
+            with self._smtp() as s: s.send_message(msg)
+            logger.info("Alert email sent"); return True
+        except Exception as e: logger.error(f"Alert email: {e}"); return False
+
+# ══════════════════════════════════════════════════════════════════════════
+# SCANNER
+# ══════════════════════════════════════════════════════════════════════════
 class VulnerabilityScanner:
     def __init__(self):
         self.vulnerabilities = []
-        self.scan_start_time = None
-        self.scan_end_time = None
+        self.scan_start_time = self.scan_end_time = None
         self.system_info = {}
         self.scan_id = str(uuid.uuid4())[:8]
 
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _add(self, severity, category, title, details, component,
+             remediation, ps_cmd=""):
+        self.vulnerabilities.append({
+            "severity": severity, "category": category, "title": title,
+            "details": details, "component": component,
+            "remediation": remediation, "powershell_command": ps_cmd
+        })
+
+    def _reg_read(self, hive, path, key):
+        k = winreg.OpenKey(hive, path)
+        v, _ = winreg.QueryValueEx(k, key)
+        winreg.CloseKey(k)
+        return v
+
+    # ── system info ────────────────────────────────────────────────────────
     def get_system_info(self):
-        """Gather comprehensive system information"""
         try:
+            mem  = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
             self.system_info = {
-                'os_version': platform.platform(),
-                'architecture': platform.architecture()[0],
-                'processor': platform.processor(),
-                'hostname': socket.gethostname(),
-                'scan_id': self.scan_id,
-                'scan_time': datetime.now().isoformat()
+                "os_version": platform.platform(),
+                "architecture": platform.architecture()[0],
+                "processor": platform.processor(),
+                "hostname": socket.gethostname(),
+                "scan_id": self.scan_id,
+                "scan_time": datetime.now().isoformat(),
+                "total_ram_gb": round(mem.total/(1024**3),2),
+                "available_ram_gb": round(mem.available/(1024**3),2),
+                "total_disk_gb": round(disk.total/(1024**3),2),
+                "used_disk_gb": round(disk.used/(1024**3),2),
+                "cpu_cores": psutil.cpu_count(logical=True),
             }
+        except Exception as e: logger.error(f"sysinfo: {e}")
+        return self.system_info
 
-            # Get RAM
-            mem = psutil.virtual_memory()
-            self.system_info['total_ram_gb'] = round(mem.total / (1024**3), 2)
-            self.system_info['available_ram_gb'] = round(mem.available / (1024**3), 2)
-
-            # Get disk info
-            disk = psutil.disk_usage('/')
-            self.system_info['total_disk_gb'] = round(disk.total / (1024**3), 2)
-            self.system_info['used_disk_gb'] = round(disk.used / (1024**3), 2)
-
-            # Get CPU info
-            self.system_info['cpu_cores'] = psutil.cpu_count(logical=True)
-            self.system_info['cpu_physical_cores'] = psutil.cpu_count(logical=False)
-
-            logger.info(f"System info gathered: {self.system_info}")
-            return self.system_info
-        except Exception as e:
-            logger.error(f"Error gathering system info: {e}")
-            return {}
-
-    def get_defender_status(self):
-        """Returns structured Defender status or None if failed"""
-        try:
-            cmd = '''powershell -NoProfile -ExecutionPolicy Bypass -Command "
-$ErrorActionPreference='Stop';
-$s = Get-MpComputerStatus;
-$p = Get-MpPreference;
-@{
-    RealTimeProtectionEnabled = $s.RealTimeProtectionEnabled;
-    AMRunningMode = $s.AMRunningMode;
-    IsTamperProtected = $s.IsTamperProtected;
-    AntivirusEnabled = $s.AntivirusEnabled;
-    BehaviorMonitorEnabled = $s.BehaviorMonitorEnabled;
-    IoavProtectionEnabled = $s.IoavProtectionEnabled;
-    NISEnabled = $s.NISEnabled;
-    OnAccessProtectionEnabled = $s.OnAccessProtectionEnabled;
-    AntivirusSignatureAgeDays = if($s.AntivirusSignatureLastUpdated){((Get-Date) - $s.AntivirusSignatureLastUpdated).Days}else{999};
-    MAPSReporting = $p.MAPSReporting;
-    SubmitSamplesConsent = $p.SubmitSamplesConsent;
-    DisableBlockAtFirstSeen = $p.DisableBlockAtFirstSeen;
-    PUAProtection = $p.PUAProtection;
-    DisableScriptScanning = $p.DisableScriptScanning;
-    DisableArchiveScanning = $p.DisableArchiveScanning;
-} | ConvertTo-Json -Compress"
-'''
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=12, check=True)
-            return json.loads(result.stdout)
-        except Exception as e:
-            logger.error(f"Defender status query failed: {e}")
-            return None
-
-    # ==================== NEW / MISSING CHECKS ====================
-    def check_uac(self):
-        """Check User Account Control settings"""
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                 r'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System')
-            consent, _ = winreg.QueryValueEx(key, 'ConsentPromptBehaviorAdmin')
-            secure_desktop, _ = winreg.QueryValueEx(key, 'PromptOnSecureDesktop')
-            winreg.CloseKey(key)
-
-            if consent != 2 or secure_desktop != 1:
-                self.vulnerabilities.append({
-                    'severity': 'high',
-                    'category': 'User Account Control',
-                    'title': 'UAC Not Fully Enabled',
-                    'details': f'UAC settings are not at maximum security. ConsentPromptBehaviorAdmin={consent}, PromptOnSecureDesktop={secure_desktop}',
-                    'component': 'UAC',
-                    'remediation': 'Set UAC to "Always notify" via Control Panel or registry.'
-                })
-        except Exception as e:
-            logger.error(f"UAC check failed: {e}")
-
-    def check_auto_login(self):
-        """Check if automatic login is enabled"""
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                 r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon')
-            auto_admin, _ = winreg.QueryValueEx(key, 'AutoAdminLogon')
-            winreg.CloseKey(key)
-
-            if auto_admin == '1':
-                self.vulnerabilities.append({
-                    'severity': 'high',
-                    'category': 'Authentication',
-                    'title': 'Automatic Login Enabled',
-                    'details': 'Windows is configured to log in automatically without requiring a password.',
-                    'component': 'Winlogon',
-                    'remediation': 'Disable AutoAdminLogon in registry or via Control Panel user accounts.'
-                })
-        except Exception:
-            # Key or value missing → automatic login is disabled
-            pass
-
-    def check_remote_desktop(self):
-        """Check if Remote Desktop is enabled"""
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                 r'SYSTEM\CurrentControlSet\Control\Terminal Server')
-            deny, _ = winreg.QueryValueEx(key, 'fDenyTSConnections')
-            winreg.CloseKey(key)
-
-            if deny == 0:
-                self.vulnerabilities.append({
-                    'severity': 'medium',
-                    'category': 'Remote Access',
-                    'title': 'Remote Desktop Enabled',
-                    'details': 'Remote Desktop is enabled. If not required, this increases attack surface.',
-                    'component': 'Terminal Services',
-                    'remediation': 'Disable Remote Desktop via System Properties or PowerShell: Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name fDenyTSConnections -Value 1'
-                })
-        except Exception as e:
-            logger.error(f"Remote Desktop check failed: {e}")
-
-    def check_admin_accounts(self):
-        """Check for enabled administrator accounts"""
-        try:
-            cmd = 'powershell "Get-LocalGroupMember -Group Administrators | Where-Object {$_.ObjectClass -eq \'User\'} | Select-Object Name, Enabled | ConvertTo-Json"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            if result.returncode == 0 and result.stdout.strip():
-                admins = json.loads(result.stdout)
-                if isinstance(admins, dict):
-                    admins = [admins]
-                for admin in admins:
-                    if admin.get('Enabled') == True:
-                        self.vulnerabilities.append({
-                            'severity': 'low',
-                            'category': 'Privilege Management',
-                            'title': f'Enabled Administrator Account: {admin["Name"]}',
-                            'details': f'User {admin["Name"]} is an enabled member of the Administrators group.',
-                            'component': 'Local Users',
-                            'remediation': 'Ensure this user needs administrative rights; otherwise remove or disable.'
-                        })
-        except Exception as e:
-            logger.error(f"Admin account check failed: {e}")
-
-    def check_open_ports(self):
-        """Check for listening ports that are commonly targeted"""
-        try:
-            cmd = 'netstat -an | findstr "LISTENING"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            open_ports = re.findall(r':(\d+)', result.stdout)
-
-            risky_ports = {
-                21: 'FTP',
-                23: 'Telnet',
-                25: 'SMTP',
-                110: 'POP3',
-                135: 'RPC',
-                139: 'NetBIOS',
-                445: 'SMB',
-                1433: 'MSSQL',
-                3306: 'MySQL',
-                3389: 'RDP',
-                5900: 'VNC',
-                8080: 'HTTP-Proxy'
-            }
-
-            for port_str in open_ports:
-                try:
-                    port = int(port_str)
-                    if port in risky_ports:
-                        self.vulnerabilities.append({
-                            'severity': 'medium',
-                            'category': 'Network',
-                            'title': f'Risky Port Open: {port} ({risky_ports[port]})',
-                            'details': f'Port {port} is listening. This service is often targeted by attackers.',
-                            'component': 'TCP Port',
-                            'remediation': f'Close port {port} or restrict access via Windows Firewall.',
-                            'port': port
-                        })
-                except ValueError:
-                    continue
-        except Exception as e:
-            logger.error(f"Port scan failed: {e}")
-
-    def check_network_sharing(self):
-        """Check if network discovery and file sharing are enabled"""
-        try:
-            # Check Network Discovery
-            cmd = 'netsh advfirewall firewall show rule name="Network Discovery" | findstr "Enable"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            if 'Yes' in result.stdout:
-                self.vulnerabilities.append({
-                    'severity': 'medium',
-                    'category': 'Network Sharing',
-                    'title': 'Network Discovery Enabled',
-                    'details': 'Network Discovery is enabled, potentially exposing the device on the network.',
-                    'component': 'Firewall Rule',
-                    'remediation': 'Disable Network Discovery via Windows Settings or netsh.'
-                })
-
-            # Check File and Printer Sharing
-            cmd = 'netsh advfirewall firewall show rule name="File and Printer Sharing" | findstr "Enable"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            if 'Yes' in result.stdout:
-                self.vulnerabilities.append({
-                    'severity': 'medium',
-                    'category': 'Network Sharing',
-                    'title': 'File and Printer Sharing Enabled',
-                    'details': 'File and Printer Sharing is enabled, which can leak information on untrusted networks.',
-                    'component': 'Firewall Rule',
-                    'remediation': 'Disable File and Printer Sharing when not needed.'
-                })
-        except Exception as e:
-            logger.error(f"Network sharing check failed: {e}")
-
-    def check_wifi_security(self):
-        """Check if any Wi‑Fi profiles are using outdated security"""
-        try:
-            cmd = 'netsh wlan show profiles'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            profiles = re.findall(r'All User Profile\s*:\s*(.+)', result.stdout)
-
-            for profile in profiles[:5]:  # limit to avoid slowdown
-                cmd = f'netsh wlan show profile name="{profile}" key=clear'
-                prof_result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-                if 'WEP' in prof_result.stdout or 'TKIP' in prof_result.stdout:
-                    self.vulnerabilities.append({
-                        'severity': 'high',
-                        'category': 'Wireless',
-                        'title': 'Weak Wi‑Fi Security Protocol',
-                        'details': f'SSID "{profile}" uses deprecated encryption (WEP/TKIP).',
-                        'component': 'Wi-Fi Profile',
-                        'remediation': 'Update router to use WPA2‑AES or WPA3.'
-                    })
-        except Exception as e:
-            logger.error(f"Wi-Fi security check failed: {e}")
-
-    def check_dns_settings(self):
-        """Check if DNS is set to a secure provider (basic check)"""
-        try:
-            # Get active network interfaces
-            cmd = 'powershell "Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object InterfaceAlias, ServerAddresses | ConvertTo-Json"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            if result.returncode == 0 and result.stdout.strip():
-                interfaces = json.loads(result.stdout)
-                if isinstance(interfaces, dict):
-                    interfaces = [interfaces]
-
-                # This list is just an example – we flag any DNS not in these "privacy" ones
-                privacy_dns = ['8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1', '208.67.222.222', '208.67.220.220']
-                for iface in interfaces:
-                    addresses = iface.get('ServerAddresses', [])
-                    if addresses:
-                        for dns in addresses:
-                            # If it's not one of the common privacy DNS, and not local (ISP), flag it.
-                            # This is informational, not a high‑risk vulnerability.
-                            if dns not in privacy_dns and not dns.startswith('192.168.') and not dns.startswith('10.'):
-                                self.vulnerabilities.append({
-                                    'severity': 'low',
-                                    'category': 'DNS',
-                                    'title': 'Non‑Privacy DNS Server',
-                                    'details': f'Interface "{iface["InterfaceAlias"]}" uses DNS: {dns}.',
-                                    'component': 'DNS Client',
-                                    'remediation': 'Consider using encrypted DNS or a privacy‑focused provider.'
-                                })
-        except Exception as e:
-            logger.error(f"DNS check failed: {e}")
-
-    # ==================== EXISTING METHODS (unchanged) ====================
-    def check_bitlocker_status(self):
-        """Check BitLocker encryption status"""
-        try:
-            cmd = 'powershell "Get-BitLockerVolume -MountPoint C: | Select-Object -Property VolumeStatus, ProtectionStatus, EncryptionPercentage | ConvertTo-Json"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                if data.get('VolumeStatus') != 'FullyEncrypted':
-                    self.vulnerabilities.append({
-                        'severity': 'high',
-                        'category': 'Disk Encryption',
-                        'title': 'BitLocker Not Fully Encrypted',
-                        'details': f'System drive is not fully encrypted. Status: {data.get("VolumeStatus", "Unknown")}, {data.get("EncryptionPercentage", 0)}% encrypted.',
-                        'component': 'BitLocker',
-                        'remediation': 'Enable BitLocker encryption from Windows Security or Control Panel.'
-                    })
-        except Exception as e:
-            logger.info(f"BitLocker check skipped or not available: {e}")
-
-    def check_password_policy(self):
-        """Check password policy settings"""
-        try:
-            cmd = '''powershell -Command "
-$policy = Get-LocalUser | Where-Object {$_.Enabled -eq $true} | ForEach-Object {
-    $user = $_.Name;
-    try {
-        $status = net user $user;
-        @{
-            User = $user;
-            PasswordExpires = if($status -match 'Password expires.*Never'){'Never'}else{$status -match 'Password expires.*(\\d+/\\d+/\\d+)' | Out-Null; $matches[1]};
-            PasswordChangeable = if($status -match 'User may change password.*Yes'){$true}else{$false};
-            PasswordRequired = if($status -match 'Password required.*Yes'){$true}else{$false};
-        }
-    } catch { @{User=$user; Error=$_.Exception.Message} }
-} | ConvertTo-Json"
-'''
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-
-            if result.returncode == 0 and result.stdout.strip():
-                users = json.loads(result.stdout)
-                for user in users:
-                    if isinstance(user, dict):
-                        if user.get('PasswordRequired') == False:
-                            self.vulnerabilities.append({
-                                'severity': 'critical',
-                                'category': 'Authentication',
-                                'title': f'No Password Required - {user.get("User")}',
-                                'details': f'User "{user.get("User")}" does not require a password.',
-                                'component': 'Local User Accounts',
-                                'remediation': 'Set a password for this user account.'
-                            })
-        except Exception as e:
-            logger.error(f"Error checking password policy: {e}")
-
-    def check_audit_policy(self):
-        """Check Windows audit policy settings"""
-        try:
-            cmd = 'auditpol /get /category:*'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-
-            # Check for critical audit categories that should be enabled
-            critical_audits = [
-                'Logon', 'Logoff', 'Account Lockout',
-                'Process Creation', 'Process Termination',
-                'Object Access', 'Policy Change'
-            ]
-
-            for audit in critical_audits:
-                if audit in result.stdout and 'Success and Failure' not in result.stdout:
-                    self.vulnerabilities.append({
-                        'severity': 'medium',
-                        'category': 'Auditing',
-                        'title': f'Audit Policy Incomplete - {audit}',
-                        'details': f'Audit category "{audit}" is not configured for both success and failure.',
-                        'component': 'Windows Audit Policy',
-                        'remediation': 'Configure audit policy via "auditpol" command or Group Policy.'
-                    })
-        except Exception as e:
-            logger.error(f"Error checking audit policy: {e}")
-
-    def check_outdated_software(self):
-        """Check for outdated software versions"""
-        try:
-            # Common software paths to check
-            software_checks = [
-                ('chrome.exe', r'C:\Program Files\Google\Chrome\Application\chrome.exe', 'Google Chrome'),
-                ('firefox.exe', r'C:\Program Files\Mozilla Firefox\firefox.exe', 'Mozilla Firefox'),
-                ('javaw.exe', r'C:\Program Files\Java', 'Java Runtime'),
-                ('python.exe', r'C:\Python', 'Python'),
-                ('node.exe', r'C:\Program Files\nodejs', 'Node.js'),
-                ('adobe.exe', r'C:\Program Files\Adobe', 'Adobe Reader')
-            ]
-
-            for exe_name, common_path, software_name in software_checks:
-                try:
-                    # Try to get version via wmic
-                    cmd = f'wmic datafile where "name=\'{common_path}\\{exe_name}\'" get Version /value'
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
-
-                    if 'Version=' in result.stdout:
-                        version = result.stdout.split('Version=')[1].strip()
-                        logger.info(f"Found {software_name} version: {version}")
-
-                        # Add check for known vulnerable versions here
-                        # This is a simplified example
-                        if software_name == 'Java Runtime' and version.startswith('8.'):
-                            if int(version.split('.')[1]) < 300:
-                                self.vulnerabilities.append({
-                                    'severity': 'high',
-                                    'category': 'Software',
-                                    'title': f'Outdated {software_name}',
-                                    'details': f'{software_name} version {version} may have known vulnerabilities.',
-                                    'component': software_name,
-                                    'remediation': f'Update {software_name} to the latest version.'
-                                })
-                except:
-                    continue
-        except Exception as e:
-            logger.error(f"Error checking outdated software: {e}")
-
-    def check_startup_programs(self):
-        """Check for suspicious startup programs"""
-        try:
-            # Check registry startup locations
-            startup_locations = [
-                (winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Run'),
-                (winreg.HKEY_LOCAL_MACHINE, r'Software\Microsoft\Windows\CurrentVersion\Run'),
-                (winreg.HKEY_LOCAL_MACHINE, r'Software\Microsoft\Windows\CurrentVersion\RunOnce'),
-                (winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\RunOnce')
-            ]
-
-            suspicious_keywords = ['temp', 'tmp', 'appdata', '%userprofile%', '.vbs', '.js', '.bat']
-            startup_programs = []
-
-            for hive, path in startup_locations:
-                try:
-                    key = winreg.OpenKey(hive, path, 0, winreg.KEY_READ)
-                    i = 0
-                    while True:
-                        try:
-                            name, value, _ = winreg.EnumValue(key, i)
-                            startup_programs.append((name, value))
-                            i += 1
-                        except OSError:
-                            break
-                    winreg.CloseKey(key)
-                except Exception:
-                    continue
-
-            # Analyze startup programs
-            for name, value in startup_programs:
-                value_lower = value.lower()
-                if any(keyword in value_lower for keyword in suspicious_keywords):
-                    self.vulnerabilities.append({
-                        'severity': 'medium',
-                        'category': 'Startup',
-                        'title': 'Suspicious Startup Program',
-                        'details': f'Startup entry "{name}" points to suspicious location: {value}',
-                        'component': 'Windows Startup',
-                        'remediation': 'Review this startup entry in Task Manager or MSConfig.'
-                    })
-        except Exception as e:
-            logger.error(f"Error checking startup programs: {e}")
-
-    def check_powershell_execution_policy(self):
-        """Check PowerShell execution policy"""
-        try:
-            cmd = 'powershell "Get-ExecutionPolicy"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
-
-            policy = result.stdout.strip()
-            risky_policies = ['Unrestricted', 'Bypass', 'RemoteSigned']
-
-            if policy in risky_policies:
-                self.vulnerabilities.append({
-                    'severity': 'high',
-                    'category': 'Scripting',
-                    'title': f'PowerShell Execution Policy: {policy}',
-                    'details': f'PowerShell execution policy is set to {policy}. This may allow execution of malicious scripts.',
-                    'component': 'PowerShell',
-                    'remediation': 'Set PowerShell execution policy to "Restricted" or "AllSigned".'
-                })
-        except Exception as e:
-            logger.error(f"Error checking PowerShell execution policy: {e}")
-
-    def check_smb_protocol(self):
-        """Check SMB protocol versions and settings"""
-        try:
-            cmd = 'powershell "Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol, EnableSMB2Protocol | ConvertTo-Json"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
-
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                if data.get('EnableSMB1Protocol'):
-                    self.vulnerabilities.append({
-                        'severity': 'critical',
-                        'category': 'Network',
-                        'title': 'SMBv1 Protocol Enabled',
-                        'details': 'SMBv1 protocol is enabled. This protocol is deprecated and vulnerable to attacks like EternalBlue.',
-                        'component': 'SMB Protocol',
-                        'remediation': 'Disable SMBv1 via PowerShell: Set-SmbServerConfiguration -EnableSMB1Protocol $false'
-                    })
-        except Exception as e:
-            logger.error(f"Error checking SMB protocol: {e}")
-
-    def check_file_integrity(self, progress_callback=None):
-        """Check integrity of critical system files"""
-        critical_files = [
-            r'C:\Windows\System32\kernel32.dll',
-            r'C:\Windows\System32\user32.dll',
-            r'C:\Windows\System32\ntdll.dll',
-            r'C:\Windows\System32\cmd.exe',
-            r'C:\Windows\System32\powershell.exe',
-            r'C:\Windows\System32\regedit.exe',
-            r'C:\Windows\System32\taskmgr.exe'
-        ]
-
-        for i, file_path in enumerate(critical_files):
-            if progress_callback:
-                progress_callback(i, len(critical_files), f"Checking {os.path.basename(file_path)}...")
-
-            if os.path.exists(file_path):
-                try:
-                    # Get file hash
-                    with open(file_path, 'rb') as f:
-                        file_hash = hashlib.sha256(f.read()).hexdigest()
-
-                    # Get file metadata
-                    file_stat = os.stat(file_path)
-                    file_size = file_stat.st_size
-                    modified_time = datetime.fromtimestamp(file_stat.st_mtime)
-
-                    # Check for suspicious modifications (very recent or very old)
-                    time_diff = (datetime.now() - modified_time).days
-                    if time_diff < 1 or time_diff > 365 * 5:  # Modified today or over 5 years ago
-                        self.vulnerabilities.append({
-                            'severity': 'medium',
-                            'category': 'File Integrity',
-                            'title': f'Suspicious File Modification - {os.path.basename(file_path)}',
-                            'details': f'Critical system file modified {time_diff} days ago. Last modified: {modified_time}.',
-                            'component': 'System Files',
-                            'remediation': 'Verify file integrity with Windows System File Checker (sfc /scannow).'
-                        })
-                except Exception as e:
-                    logger.error(f"Error checking file {file_path}: {e}")
-
-    def check_services(self):
-        """Check for vulnerable or unnecessary services"""
-        try:
-            cmd = '''powershell "Get-Service | Where-Object {$_.StartType -eq 'Automatic'} | 
-                     Select-Object Name, DisplayName, Status | ConvertTo-Json"'''
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-
-            if result.returncode == 0 and result.stdout.strip():
-                services = json.loads(result.stdout)
-
-                risky_services = [
-                    'RemoteRegistry', 'Telnet', 'TFTP', 'W3SVC',
-                    'MSSQLSERVER', 'MYSQL', 'VNC', 'TeamViewer'
-                ]
-
-                for service in services:
-                    if isinstance(service, dict):
-                        service_name = service.get('Name', '')
-                        display_name = service.get('DisplayName', '')
-
-                        # Check for risky services
-                        for risky in risky_services:
-                            if risky.lower() in service_name.lower() or risky.lower() in display_name.lower():
-                                self.vulnerabilities.append({
-                                    'severity': 'medium',
-                                    'category': 'Services',
-                                    'title': f'Risky Service Running - {display_name}',
-                                    'details': f'Service "{display_name}" ({service_name}) may pose security risks if not needed.',
-                                    'component': 'Windows Services',
-                                    'remediation': f'Review if {display_name} service is necessary and disable if not needed.'
-                                })
-        except Exception as e:
-            logger.error(f"Error checking services: {e}")
-
+    # ── individual checks ──────────────────────────────────────────────────
     def check_windows_updates(self):
-        """Check for pending Windows updates"""
-        try:
-            logger.info("Checking Windows updates...")
-            cmd = 'powershell "Get-HotFix | Select-Object -Last 1 | ConvertTo-Json"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                install_date = data.get('InstalledOn', '')
-
-                if install_date:
-                    try:
-                        last_update = datetime.strptime(install_date.split('T')[0], '%Y-%m-%d')
-                        days_old = (datetime.now() - last_update).days
-
-                        if days_old > 60:
-                            self.vulnerabilities.append({
-                                'severity': 'high',
-                                'category': 'Windows Update',
-                                'title': 'Outdated Windows Updates',
-                                'details': f'Last Windows update was {days_old} days ago. System may be missing critical security patches.',
-                                'component': 'Windows Update Service',
-                                'remediation': 'Run Windows Update from Settings or use: Start-Process ms-settings:windowsupdate'
-                            })
-                            logger.warning(f"Windows updates outdated: {days_old} days old")
-                    except Exception as e:
-                        logger.error(f"Error parsing update date: {e}")
-
-            cmd_service = 'sc query wuauserv'
-            result = subprocess.run(cmd_service, capture_output=True, text=True, shell=True, timeout=5)
-
-            if 'RUNNING' not in result.stdout:
-                self.vulnerabilities.append({
-                    'severity': 'medium',
-                    'category': 'Windows Update',
-                    'title': 'Windows Update Service Not Running',
-                    'details': 'The Windows Update service is not active. Automatic updates are disabled.',
-                    'component': 'Windows Update Service',
-                    'remediation': 'Start Windows Update service: sc start wuauserv'
-                })
-                logger.warning("Windows Update service not running")
-
-        except Exception as e:
-            logger.error(f"Error checking updates: {e}")
+        data = run_ps("Get-HotFix | Select-Object -Last 1 | ConvertTo-Json -Compress")
+        if isinstance(data, dict):
+            ts = data.get("InstalledOn","")
+            if ts:
+                try:
+                    last = datetime.strptime(ts.split("T")[0],"%Y-%m-%d")
+                    age  = (datetime.now()-last).days
+                    if age > 60:
+                        self._add("high","Windows Update","Outdated Windows Updates",
+                            f"Last update {age} days ago. Missing critical patches.",
+                            "Windows Update Service",
+                            "Run Windows Update from Settings.",
+                            "Start-Process ms-settings:windowsupdate")
+                except: pass
+        r = subprocess.run(["sc","query","wuauserv"],capture_output=True,text=True,timeout=5)
+        if "RUNNING" not in r.stdout:
+            self._add("medium","Windows Update","Windows Update Service Not Running",
+                "Automatic updates disabled.",
+                "Windows Update Service",
+                "Start the Windows Update service.",
+                "Start-Service -Name wuauserv; Set-Service -Name wuauserv -StartupType Automatic")
 
     def check_firewall(self):
-        """Check Windows Firewall status with more comprehensive checks"""
-        try:
-            logger.info("Checking firewall...")
-            profiles = ['DomainProfile', 'PrivateProfile', 'PublicProfile']
+        profiles = [("DomainProfile","domain"),("PrivateProfile","private"),("PublicProfile","public")]
+        for name, arg in profiles:
+            r = subprocess.run(["netsh","advfirewall","show",arg,"state"],
+                               capture_output=True,text=True,timeout=5)
+            if "OFF" in r.stdout or "Disabled" in r.stdout:
+                sev = "critical" if name == "PublicProfile" else "high"
+                self._add(sev,"Firewall",f"Windows Firewall Disabled – {name}",
+                    f"Firewall is OFF for {name}. Network attacks are possible.",
+                    "Windows Defender Firewall",
+                    f"Enable the {name} firewall profile.",
+                    f"Set-NetFirewallProfile -Profile {name} -Enabled True")
 
-            for profile in profiles:
-                cmd = f'netsh advfirewall show {profile.lower()} state'
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
-
-                if 'OFF' in result.stdout or 'Disabled' in result.stdout:
-                    severity = 'critical' if profile == 'PublicProfile' else 'high'
-                    self.vulnerabilities.append({
-                        'severity': severity,
-                        'category': 'Firewall',
-                        'title': f'Windows Firewall Disabled - {profile}',
-                        'details': f'Windows Defender Firewall is turned off for {profile}. System is exposed to network attacks.',
-                        'component': 'Windows Defender Firewall',
-                        'remediation': f'Enable firewall: netsh advfirewall set {profile.lower()} state on'
-                    })
-                    logger.warning(f"Firewall disabled for {profile}")
-        except Exception as e:
-            logger.error(f"Error checking firewall: {e}")
+    def _get_defender_status(self):
+        script = """
+$s=$null; $p=$null
+try{$s=Get-MpComputerStatus;$p=Get-MpPreference}catch{}
+if($s -and $p){@{
+  RealTimeProtectionEnabled=$s.RealTimeProtectionEnabled;
+  AntivirusEnabled=$s.AntivirusEnabled;
+  BehaviorMonitorEnabled=$s.BehaviorMonitorEnabled;
+  IoavProtectionEnabled=$s.IoavProtectionEnabled;
+  NISEnabled=$s.NISEnabled;
+  IsTamperProtected=$s.IsTamperProtected;
+  AMRunningMode=$s.AMRunningMode;
+  AntivirusSignatureAgeDays=if($s.AntivirusSignatureLastUpdated){((Get-Date)-$s.AntivirusSignatureLastUpdated).Days}else{999};
+  MAPSReporting=$p.MAPSReporting;
+  SubmitSamplesConsent=$p.SubmitSamplesConsent;
+  DisableBlockAtFirstSeen=$p.DisableBlockAtFirstSeen;
+  PUAProtection=$p.PUAProtection;
+  DisableScriptScanning=$p.DisableScriptScanning;
+  DisableArchiveScanning=$p.DisableArchiveScanning
+}|ConvertTo-Json -Compress}else{"null"}"""
+        return run_ps(script, timeout=15)
 
     def check_antivirus(self):
-        """Check Windows Defender status - comprehensive check"""
-        logger.info("Checking antivirus...")
-        status = self.get_defender_status()
-        if not status:
-            self.vulnerabilities.append({
-                'severity': 'medium',
-                'category': 'Antivirus',
-                'title': 'Could not query Windows Defender status',
-                'details': 'Failed to retrieve Defender configuration. Check if Windows Security is functional.',
-                'component': 'Windows Defender',
-                'remediation': 'Open Windows Security and check for issues.'
-            })
-            logger.error("Could not query Defender status")
-            return
+        st = self._get_defender_status()
+        if not st or st == "null":
+            self._add("medium","Antivirus","Cannot Query Windows Defender",
+                "Defender status unavailable. Windows Security may be broken.",
+                "Windows Defender","Open Windows Security and check for issues.",
+                "Start-Process windowsdefender:"); return
+        passive = st.get("AMRunningMode","") == "Passive"
+        tp  = st.get("IsTamperProtected", False)
+        def av(sev,title,details,cmd):
+            note = "\n(Defender passive – third-party AV active)" if passive else ""
+            self._add(sev,"Antivirus",title,details+note,"Windows Defender","",cmd)
 
-        tp = status.get('IsTamperProtected', False)
-        passive = status.get('AMRunningMode', '') == 'Passive'
-
-        def add_vuln(sev, title, details, remediation):
-            extra = {'tamper_protected': tp} if tp else {}
-            if passive:
-                details += "\n(Windows Defender is in passive mode — another AV is controlling protection)"
-            self.vulnerabilities.append({
-                'severity': sev,
-                'category': 'Antivirus',
-                'title': title,
-                'details': details,
-                'component': 'Windows Defender',
-                'remediation': remediation,
-                'extra_info': extra
-            })
-
-        # Check all Defender settings
         checks = [
-            ('RealTimeProtectionEnabled', 'critical', 'Real-time Protection Disabled',
-             'Critical protection feature is off.', 'Enable via Windows Security or PowerShell'),
-            ('AntivirusEnabled', 'critical', 'Antivirus Engine Disabled',
-             'Core antivirus functionality is disabled.', 'Enable via Windows Security'),
-            ('BehaviorMonitorEnabled', 'high', 'Behavior Monitoring Disabled',
-             'Behavior monitoring is disabled.', 'Enable behavior monitoring'),
-            ('IoavProtectionEnabled', 'medium', 'IOAV Protection Disabled',
-             'Downloaded file protection is disabled.', 'Enable IOAV protection'),
-            ('NISEnabled', 'medium', 'Network Protection Disabled',
-             'Network Inspection System is disabled.', 'Enable network protection'),
-            ('DisableScriptScanning', 'medium', 'Script Scanning Disabled',
-             'Script scanning is disabled.', 'Enable script scanning'),
-            ('DisableArchiveScanning', 'low', 'Archive Scanning Disabled',
-             'Archive file scanning is disabled.', 'Enable archive scanning')
+            ("RealTimeProtectionEnabled","critical","Real-time Protection Disabled",
+             "Malware protection is off.","Set-MpPreference -DisableRealtimeMonitoring $false"),
+            ("AntivirusEnabled","critical","Antivirus Engine Disabled",
+             "Core AV engine is disabled.","Set-MpPreference -DisableRealtimeMonitoring $false"),
+            ("BehaviorMonitorEnabled","high","Behavior Monitoring Disabled",
+             "Behavioral analysis is off.","Set-MpPreference -DisableBehaviorMonitoring $false"),
+            ("IoavProtectionEnabled","medium","IOAV Protection Disabled",
+             "Downloaded-file scanning is off.","Set-MpPreference -DisableIOAVProtection $false"),
+            ("NISEnabled","medium","Network Inspection Disabled",
+             "Network Inspection System is off.","Set-MpPreference -DisableIntrusionPreventionSystem $false"),
         ]
+        for key,sev,title,details,cmd in checks:
+            if not st.get(key,True if key.startswith("Disable") else False):
+                av(sev,title,details,cmd)
 
-        for setting, severity, title, details, remediation in checks:
-            if not status.get(setting, True) if setting.startswith('Disable') else not status.get(setting, False):
-                add_vuln(severity, title, details, remediation)
-
-        if status.get('AntivirusSignatureAgeDays', 999) > 7:
-            add_vuln('high', 'Outdated Virus Definitions',
-                f'Definitions are {status["AntivirusSignatureAgeDays"]} days old.',
-                'Update definitions via Windows Security')
-
-        if status.get('MAPSReporting', 0) == 0:
-            add_vuln('medium', 'Cloud-delivered Protection Disabled',
-                'Cloud-delivered protection (MAPS) is disabled.',
-                'Enable cloud protection')
-
-        if status.get('SubmitSamplesConsent', 0) == 2:
-            add_vuln('low', 'Automatic Sample Submission Disabled',
-                'Automatic sample submission is disabled.',
-                'Enable sample submission')
-
-        if status.get('DisableBlockAtFirstSeen', False):
-            add_vuln('medium', 'Block at First Sight Disabled',
-                'Block at First Sight is disabled.',
-                'Enable Block at First Sight')
-
-        if status.get('PUAProtection', 0) == 0:
-            add_vuln('medium', 'PUA Protection Disabled',
-                'Potentially Unwanted Application protection is disabled.',
-                'Enable PUA protection')
-
+        age = st.get("AntivirusSignatureAgeDays",999)
+        if age > 7:
+            av("high","Outdated Virus Definitions",f"Definitions are {age} days old.","Update-MpSignature")
+        if st.get("MAPSReporting",0)==0:
+            av("medium","Cloud Protection Disabled","MAPS cloud protection is off.","Set-MpPreference -MAPSReporting Advanced")
+        if st.get("DisableBlockAtFirstSeen",False):
+            av("medium","Block at First Sight Disabled","Block at First Sight is off.","Set-MpPreference -DisableBlockAtFirstSeen $false")
+        if st.get("PUAProtection",0)==0:
+            av("medium","PUA Protection Disabled","Unwanted app protection is off.","Set-MpPreference -PUAProtection Enabled")
         if not tp:
-            add_vuln('high', 'Tamper Protection Disabled',
-                'Tamper Protection is OFF — malware may disable Defender silently.',
-                'Enable Tamper Protection in Windows Security')
+            av("high","Tamper Protection Disabled",
+               "Malware could disable Defender silently.",
+               "# Enable Tamper Protection manually in Windows Security > Virus & threat protection settings")
 
-        if passive and status.get('RealTimeProtectionEnabled'):
-            add_vuln('medium', 'Defender Running in Passive Mode',
-                'Third-party antivirus detected. Windows Defender is passive.',
-                'Check if third-party AV is properly configured')
+    def check_defender_exclusions(self):
+        data = run_ps("""
+$p=Get-MpPreference
+@{ExclusionPath=$p.ExclusionPath;ExclusionExtension=$p.ExclusionExtension;ExclusionProcess=$p.ExclusionProcess}|ConvertTo-Json -Compress""", 15)
+        if not isinstance(data, dict): return
+        risky = ["desktop","downloads","temp","appdata","documents","public"]
+        for path in (data.get("ExclusionPath") or []):
+            sev = "critical" if any(r in str(path).lower() for r in risky) else "high"
+            self._add(sev,"Antivirus",f"Defender Path Exclusion: {path}",
+                f'Defender is NOT scanning "{path}". Malware can hide here undetected.',
+                "Windows Defender Exclusions",
+                "Remove this exclusion unless absolutely required.",
+                f'Remove-MpPreference -ExclusionPath "{path}"')
+        for ext in (data.get("ExclusionExtension") or []):
+            self._add("high","Antivirus",f"Defender Extension Exclusion: {ext}",
+                f'Files ending in "{ext}" are not scanned by Defender.',
+                "Windows Defender Exclusions",
+                "Remove this extension exclusion.",
+                f'Remove-MpPreference -ExclusionExtension "{ext}"')
+        for proc in (data.get("ExclusionProcess") or []):
+            self._add("critical","Antivirus",f"Defender Process Exclusion: {proc}",
+                f'Process "{proc}" is excluded from Defender scanning.',
+                "Windows Defender Exclusions",
+                "Remove this process exclusion.",
+                f'Remove-MpPreference -ExclusionProcess "{proc}"')
 
+    def check_uac(self):
+        try:
+            consent = self._reg_read(winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ConsentPromptBehaviorAdmin")
+            desktop = self._reg_read(winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","PromptOnSecureDesktop")
+            if consent != 2 or desktop != 1:
+                self._add("high","User Account Control","UAC Not at Maximum Security",
+                    f"ConsentPromptBehaviorAdmin={consent}, PromptOnSecureDesktop={desktop}.",
+                    "UAC","Set UAC to 'Always notify'.",
+                    'Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "ConsentPromptBehaviorAdmin" -Value 2; Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "PromptOnSecureDesktop" -Value 1')
+        except: pass
+
+    def check_auto_login(self):
+        try:
+            v = self._reg_read(winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon")
+            if v == "1":
+                self._add("high","Authentication","Automatic Login Enabled",
+                    "Windows logs in automatically without a password.",
+                    "Winlogon","Disable AutoAdminLogon.",
+                    'Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" -Name "AutoAdminLogon" -Value "0"')
+        except: pass
+
+    def check_remote_desktop(self):
+        try:
+            v = self._reg_read(winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Terminal Server","fDenyTSConnections")
+            if v == 0:
+                self._add("medium","Remote Access","Remote Desktop (RDP) Enabled",
+                    "RDP is enabled. Unnecessary exposure if not required.",
+                    "Terminal Services","Disable RDP if not needed.",
+                    'Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name "fDenyTSConnections" -Value 1')
+        except: pass
+
+    def check_rdp_nla(self):
+        try:
+            v = self._reg_read(winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp","UserAuthentication")
+            if v == 0:
+                self._add("high","Remote Access","RDP NLA (Network Level Auth) Disabled",
+                    "RDP does not require NLA. Brute-force attacks are easier.",
+                    "Terminal Services","Enable NLA for RDP.",
+                    'Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" -Name "UserAuthentication" -Value 1')
+        except: pass
+
+    def check_guest_account(self):
+        r = subprocess.run(["net","user","Guest"],capture_output=True,text=True,timeout=5)
+        if "Account active" in r.stdout and "Yes" in r.stdout:
+            self._add("high","User Accounts","Guest Account Enabled",
+                "The built-in Guest account is active. Unauthorized access risk.",
+                "Local Users","Disable the Guest account.",
+                'Disable-LocalUser -Name "Guest"')
+
+    def check_admin_accounts(self):
+        data = run_ps('Get-LocalGroupMember -Group Administrators | Where-Object {$_.ObjectClass -eq "User"} | Select-Object Name,Enabled | ConvertTo-Json -Compress')
+        if not data: return
+        if isinstance(data, dict): data = [data]
+        for a in data:
+            if a.get("Enabled"):
+                self._add("low","Privilege Management",f'Admin Account Enabled: {a["Name"]}',
+                    f'{a["Name"]} is an active administrator.',
+                    "Local Users","Ensure admin rights are required.",
+                    f'Disable-LocalUser -Name "{a["Name"]}"')
+
+    def check_open_ports(self):
+        r = subprocess.run(["netstat","-an"],capture_output=True,text=True,timeout=10)
+        risky = {21:"FTP",23:"Telnet",25:"SMTP",110:"POP3",135:"RPC",
+                 139:"NetBIOS",445:"SMB",1433:"MSSQL",3306:"MySQL",
+                 3389:"RDP",5900:"VNC",8080:"HTTP-Proxy"}
+        seen = set()
+        for m in re.finditer(r":(\d+)\s",r.stdout):
+            p = int(m.group(1))
+            if p in risky and p not in seen:
+                seen.add(p)
+                self._add("medium","Network",f"Risky Port Open: {p} ({risky[p]})",
+                    f"Port {p} ({risky[p]}) is listening. Common attack target.",
+                    "TCP Port",f"Block or close port {p} if not required.",
+                    f"New-NetFirewallRule -DisplayName 'Block Port {p}' -Direction Inbound -LocalPort {p} -Protocol TCP -Action Block")
+
+    def check_network_sharing(self):
+        for name, gname in [("Network Discovery","Network Discovery"),
+                             ("File and Printer Sharing","File and Printer Sharing")]:
+            r = subprocess.run(["netsh","advfirewall","firewall","show","rule",f'name="{name}"'],
+                               capture_output=True,text=True,timeout=10)
+            if "Yes" in r.stdout:
+                self._add("medium","Network Sharing",f"{name} Enabled",
+                    f"{name} is enabled and may expose this device.",
+                    "Firewall Rule",f"Disable {name} when not needed.",
+                    f'Set-NetFirewallRule -DisplayGroup "{gname}" -Enabled False')
+
+    def check_smb_protocol(self):
+        data = run_ps("Get-SmbServerConfiguration|Select-Object EnableSMB1Protocol,EnableSMB2Protocol|ConvertTo-Json -Compress",5)
+        if isinstance(data,dict) and data.get("EnableSMB1Protocol"):
+            self._add("critical","Network","SMBv1 Protocol Enabled",
+                "SMBv1 is enabled. Vulnerable to EternalBlue/WannaCry.",
+                "SMB Protocol","Disable SMBv1 immediately.",
+                "Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force")
+
+    def check_password_policy(self):
+        data = run_ps("Get-LocalUser|Where-Object{$_.Enabled}|Select-Object Name,PasswordRequired|ConvertTo-Json -Compress")
+        if not data: return
+        if isinstance(data,dict): data=[data]
+        for u in data:
+            if u.get("PasswordRequired")==False:
+                self._add("critical","Authentication",f'No Password Required: {u["Name"]}',
+                    f'User "{u["Name"]}" has no password requirement.',
+                    "Local User Accounts","Set a strong password.",
+                    f'Set-LocalUser -Name "{u["Name"]}" -Password (Read-Host -AsSecureString "New password")')
+
+    def check_bitlocker_status(self):
+        data = run_ps("Get-BitLockerVolume -MountPoint C:|Select-Object VolumeStatus,EncryptionPercentage|ConvertTo-Json -Compress")
+        if isinstance(data,dict) and data.get("VolumeStatus")!="FullyEncrypted":
+            pct = data.get("EncryptionPercentage",0)
+            self._add("high","Disk Encryption","BitLocker Not Fully Enabled",
+                f"C: drive is {pct}% encrypted. Data at rest is not protected.",
+                "BitLocker","Enable BitLocker on the C: drive.",
+                "Enable-BitLocker -MountPoint 'C:' -SkipHardwareTest -TpmProtector")
+
+    def check_powershell_execution_policy(self):
+        r = subprocess.run(["powershell","-Command","Get-ExecutionPolicy"],
+                           capture_output=True,text=True,timeout=5)
+        policy = r.stdout.strip()
+        if policy in ["Unrestricted","Bypass","RemoteSigned"]:
+            self._add("high","Scripting",f"PowerShell Execution Policy: {policy}",
+                f"Policy is '{policy}'. Malicious scripts may run without restriction.",
+                "PowerShell","Set to Restricted or AllSigned.",
+                "Set-ExecutionPolicy -ExecutionPolicy Restricted -Scope LocalMachine -Force")
+
+    def check_audit_policy(self):
+        r = subprocess.run(["auditpol","/get","/category:*"],
+                           capture_output=True,text=True,timeout=10)
+        for audit in ["Logon","Logoff","Account Lockout","Process Creation","Object Access","Policy Change"]:
+            if audit in r.stdout and "Success and Failure" not in r.stdout:
+                self._add("medium","Auditing",f"Audit Policy Incomplete: {audit}",
+                    f"'{audit}' auditing is not fully configured.",
+                    "Windows Audit Policy","Configure audit policy via auditpol or Group Policy.",
+                    f'auditpol /set /subcategory:"{audit}" /success:enable /failure:enable')
+
+    def check_autorun(self):
+        try:
+            v = self._reg_read(winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer","NoDriveTypeAutoRun")
+            if v != 0xFF:
+                self._add("medium","Autorun","AutoRun Not Fully Disabled",
+                    "AutoRun for removable media is not fully disabled.",
+                    "Windows Explorer","Set NoDriveTypeAutoRun to 255.",
+                    'Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoDriveTypeAutoRun" -Value 255 -Type DWord')
+        except:
+            self._add("medium","Autorun","AutoRun Policy Key Missing",
+                "AutoRun may be enabled for removable drives.",
+                "Windows Explorer","Disable AutoRun.",
+                'Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoDriveTypeAutoRun" -Value 255 -Type DWord')
+
+    def check_startup_programs(self):
+        locs = [
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            (winreg.HKEY_LOCAL_MACHINE,r"Software\Microsoft\Windows\CurrentVersion\Run"),
+        ]
+        suspicious = ["temp","tmp","appdata","%userprofile%",".vbs",".js",".bat"]
+        for hive, path in locs:
+            try:
+                key = winreg.OpenKey(hive, path, 0, winreg.KEY_READ)
+                i = 0
+                while True:
+                    try:
+                        name, val, _ = winreg.EnumValue(key, i); i+=1
+                        if any(s in val.lower() for s in suspicious):
+                            self._add("medium","Startup","Suspicious Startup Entry",
+                                f'Entry "{name}" runs from a suspicious path: {val}',
+                                "Windows Startup","Review in Task Manager > Startup.",
+                                f'Remove-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "{name}" -ErrorAction SilentlyContinue')
+                    except OSError: break
+                winreg.CloseKey(key)
+            except: continue
+
+    def check_wifi_security(self):
+        r = subprocess.run(["netsh","wlan","show","profiles"],
+                           capture_output=True,text=True,timeout=10)
+        for profile in re.findall(r"All User Profile\s*:\s*(.+)",r.stdout)[:5]:
+            pr = subprocess.run(["netsh","wlan","show","profile",f"name={profile}","key=clear"],
+                                capture_output=True,text=True,timeout=10)
+            if "WEP" in pr.stdout or "TKIP" in pr.stdout:
+                self._add("high","Wireless",f"Weak Wi-Fi Security: {profile}",
+                    f'"{profile}" uses deprecated WEP/TKIP encryption.',
+                    "Wi-Fi Profile","Update router to WPA2-AES or WPA3.",
+                    f'Write-Host "Manually update router settings for SSID: {profile}"')
+
+    def check_services(self):
+        data = run_ps('Get-Service|Where-Object{$_.StartType -eq "Automatic"}|Select-Object Name,DisplayName,Status|ConvertTo-Json -Compress')
+        if not data: return
+        if isinstance(data, dict): data=[data]
+        risky = ["RemoteRegistry","Telnet","TFTP","W3SVC","MSSQLSERVER","MYSQL","VNC","TeamViewer"]
+        for svc in data:
+            name = svc.get("Name",""); disp = svc.get("DisplayName","")
+            for r in risky:
+                if r.lower() in name.lower() or r.lower() in disp.lower():
+                    self._add("medium","Services",f"Risky Service Running: {disp}",
+                        f'"{disp}" runs automatically and may not be required.',
+                        "Windows Services","Disable if not needed.",
+                        f'Stop-Service -Name "{name}" -Force; Set-Service -Name "{name}" -StartupType Disabled')
+
+    def check_ntp(self):
+        try:
+            v = self._reg_read(winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Services\W32Time\Parameters","NtpServer")
+            if not v:
+                raise ValueError("empty")
+        except:
+            self._add("low","Time Synchronization","NTP Server Not Configured",
+                "System clock may drift, affecting logs and authentication.",
+                "Windows Time Service","Configure an NTP server.",
+                'w32tm /config /manualpeerlist:"time.windows.com" /syncfromflags:manual /update; Restart-Service w32tm')
+
+    def check_telnet(self):
+        r = subprocess.run(["dism","/online","/Get-Features"],
+                           capture_output=True,text=True,timeout=15)
+        if "TelnetClient" in r.stdout and "Enabled" in r.stdout:
+            self._add("medium","Optional Features","Telnet Client Installed",
+                "Telnet transmits all data (including passwords) unencrypted.",
+                "Windows Features","Remove Telnet Client.",
+                "Disable-WindowsOptionalFeature -Online -FeatureName TelnetClient")
+
+    def check_dns_settings(self):
+        data = run_ps("Get-DnsClientServerAddress -AddressFamily IPv4|Select-Object InterfaceAlias,ServerAddresses|ConvertTo-Json -Compress")
+        if not data: return
+        if isinstance(data,dict): data=[data]
+        known = {"8.8.8.8","8.8.4.4","1.1.1.1","1.0.0.1","208.67.222.222","208.67.220.220"}
+        for iface in data:
+            for dns in (iface.get("ServerAddresses") or []):
+                if dns not in known and not dns.startswith(("192.168.","10.","172.")):
+                    self._add("low","DNS","Non-Standard DNS Server",
+                        f'Interface "{iface["InterfaceAlias"]}" uses DNS {dns} (not a known privacy-safe server).',
+                        "DNS Client","Consider using 1.1.1.1 or 8.8.8.8.",
+                        f'Set-DnsClientServerAddress -InterfaceAlias "{iface["InterfaceAlias"]}" -ServerAddresses "1.1.1.1","1.0.0.1"')
+
+    def check_file_integrity(self, callback=None):
+        sysroot = os.environ.get("SystemRoot","C:\\Windows")
+        files = [f"{sysroot}\\System32\\{f}" for f in
+                 ["kernel32.dll","user32.dll","ntdll.dll","cmd.exe",
+                  "powershell.exe","regedit.exe","taskmgr.exe"]]
+        for i,fp in enumerate(files):
+            if callback: callback(i,len(files),f"Checking {os.path.basename(fp)}...")
+            if not os.path.exists(fp): continue
+            try:
+                mt   = datetime.fromtimestamp(os.stat(fp).st_mtime)
+                diff = (datetime.now()-mt).days
+                if diff < 1 or diff > 365*5:
+                    self._add("medium","File Integrity",
+                        f"Suspicious Modification: {os.path.basename(fp)}",
+                        f"File modified {diff} days ago ({mt}). Unexpected for a system file.",
+                        "System Files","Run sfc /scannow to verify integrity.",
+                        "sfc /scannow")
+            except Exception as e: logger.error(f"File check {fp}: {e}")
+
+    # ── orchestration ──────────────────────────────────────────────────────
     def scan_all(self, progress_callback=None):
-        """Run all vulnerability checks with progress reporting"""
         self.vulnerabilities = []
         self.scan_start_time = datetime.now()
-
-        logger.info(f"Starting comprehensive system scan (ID: {self.scan_id})")
-
         checks = [
-            (self.get_system_info, "Gathering system information..."),
-            (self.check_windows_updates, "Checking Windows updates..."),
-            (self.check_firewall, "Checking firewall..."),
-            (self.check_antivirus, "Checking antivirus..."),
-            (self.check_uac, "Checking User Account Control..."),
-            (self.check_auto_login, "Checking auto-login..."),
-            (self.check_remote_desktop, "Checking Remote Desktop..."),
-            (self.check_admin_accounts, "Checking admin accounts..."),
-            (self.check_open_ports, "Checking open ports..."),
-            (self.check_network_sharing, "Checking network sharing..."),
-            (self.check_wifi_security, "Checking WiFi security..."),
-            (self.check_dns_settings, "Checking DNS settings..."),
-            (self.check_bitlocker_status, "Checking BitLocker..."),
-            (self.check_password_policy, "Checking password policy..."),
-            (self.check_audit_policy, "Checking audit policy..."),
-            (self.check_outdated_software, "Checking software versions..."),
-            (self.check_startup_programs, "Checking startup programs..."),
-            (self.check_powershell_execution_policy, "Checking PowerShell..."),
-            (self.check_smb_protocol, "Checking SMB protocol..."),
-            (self.check_services, "Checking services..."),
-            (lambda: self.check_file_integrity(progress_callback), "Checking file integrity...")
+            (self.get_system_info,             "Gathering system information…"),
+            (self.check_windows_updates,       "Checking Windows updates…"),
+            (self.check_firewall,              "Checking firewall…"),
+            (self.check_antivirus,             "Checking antivirus…"),
+            (self.check_defender_exclusions,   "Checking Defender exclusions…"),
+            (self.check_uac,                   "Checking UAC…"),
+            (self.check_auto_login,            "Checking auto-login…"),
+            (self.check_remote_desktop,        "Checking Remote Desktop…"),
+            (self.check_rdp_nla,               "Checking RDP NLA…"),
+            (self.check_guest_account,         "Checking guest account…"),
+            (self.check_admin_accounts,        "Checking admin accounts…"),
+            (self.check_open_ports,            "Checking open ports…"),
+            (self.check_network_sharing,       "Checking network sharing…"),
+            (self.check_smb_protocol,          "Checking SMB protocol…"),
+            (self.check_password_policy,       "Checking password policy…"),
+            (self.check_bitlocker_status,      "Checking BitLocker…"),
+            (self.check_powershell_execution_policy,"Checking PowerShell policy…"),
+            (self.check_audit_policy,          "Checking audit policy…"),
+            (self.check_autorun,               "Checking AutoRun…"),
+            (self.check_startup_programs,      "Checking startup programs…"),
+            (self.check_wifi_security,         "Checking Wi-Fi security…"),
+            (self.check_services,              "Checking services…"),
+            (self.check_ntp,                   "Checking NTP configuration…"),
+            (self.check_telnet,                "Checking Telnet client…"),
+            (self.check_dns_settings,          "Checking DNS settings…"),
+            (lambda: self.check_file_integrity(progress_callback), "Checking file integrity…"),
         ]
-
-        for i, (check_func, message) in enumerate(checks):
-            if progress_callback:
-                progress_callback(i, len(checks), message)
-
-            try:
-                check_func()
-                logger.info(f"Completed: {message}")
-            except Exception as e:
-                logger.error(f"Error in {message}: {e}")
-
+        for i,(fn,msg) in enumerate(checks):
+            if progress_callback: progress_callback(i,len(checks),msg)
+            try: fn()
+            except Exception as e: logger.error(f"Check failed [{msg}]: {e}")
         self.scan_end_time = datetime.now()
-        scan_duration = (self.scan_end_time - self.scan_start_time).total_seconds()
-
-        logger.info(f"Scan complete. Found {len(self.vulnerabilities)} vulnerabilities in {scan_duration:.2f} seconds")
-
-        # Calculate risk score
-        severity_weights = {'critical': 10, 'high': 7, 'medium': 4, 'low': 1}
-        risk_score = sum(severity_weights.get(v['severity'], 0) for v in self.vulnerabilities)
-        max_possible = len(self.vulnerabilities) * 10
-        self.risk_percentage = (risk_score / max_possible * 100) if max_possible > 0 else 0
-
         return self.vulnerabilities
 
-    def calculate_risk_score(self):
-        """Calculate overall risk score based on vulnerabilities"""
-        if not self.vulnerabilities:
-            return 0, "Low Risk"
+    def risk_score(self):
+        if not self.vulnerabilities: return 0,"Low Risk"
+        w = {"critical":10,"high":7,"medium":4,"low":1}
+        total = sum(w.get(v["severity"],0) for v in self.vulnerabilities)
+        pct   = round(total/(len(self.vulnerabilities)*10)*100,1)
+        level = ("Critical Risk" if pct>=70 else "High Risk" if pct>=40
+                 else "Medium Risk" if pct>=20 else "Low Risk")
+        return pct, level
 
-        severity_scores = {
-            'critical': 10,
-            'high': 7,
-            'medium': 4,
-            'low': 1
-        }
+    def generate_html_report(self):
+        vulns = sorted(self.vulnerabilities,
+                       key=lambda v:{"critical":0,"high":1,"medium":2,"low":3}.get(v["severity"],4))
+        pct, level = self.risk_score()
+        sev_colors = {"critical":"#e74c3c","high":"#e67e22","medium":"#f39c12","low":"#95a5a6"}
+        rows = ""
+        for i,v in enumerate(vulns,1):
+            c = sev_colors.get(v["severity"],"#000")
+            ctrl = ""
+            for fw in ["CIS","NIST","ISO 27001","PCI-DSS"]:
+                tags = COMPLIANCE.get(fw,{}).get(v.get("category",""),[])
+                if tags: ctrl += f"<span style='background:{c};color:#fff;border-radius:3px;padding:1px 5px;margin:2px;font-size:10px'>{fw}: {', '.join(tags)}</span>"
+            rows += f"""<tr>
+<td>{i}</td>
+<td><b style='color:{c}'>{v['severity'].upper()}</b></td>
+<td>{html_esc(v.get('category',''))}</td>
+<td>{html_esc(v.get('title',''))}</td>
+<td>{html_esc(v.get('details',''))}</td>
+<td style='font-size:11px'>{html_esc(v.get('remediation',''))}</td>
+<td style='font-size:10px'>{ctrl}</td>
+</tr>"""
+        return f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+<title>RAVEN-X Enterprise Report</title>
+<style>
+body{{font-family:Segoe UI,sans-serif;margin:40px;background:#f5f7fa}}
+.container{{max-width:1400px;margin:0 auto;background:#fff;padding:30px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.1)}}
+.header{{background:#2c3e50;color:#fff;padding:20px;border-radius:5px;margin-bottom:20px}}
+.kpi{{display:grid;grid-template-columns:repeat(5,1fr);gap:15px;margin:20px 0}}
+.kpi-card{{background:#f8f9fa;padding:15px;border-radius:8px;text-align:center;border-top:4px solid}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{background:#2c3e50;color:#fff;padding:10px;text-align:left}}
+td{{padding:8px;border-bottom:1px solid #eee;vertical-align:top}}
+tr:nth-child(even){{background:#fafafa}}
+</style></head><body><div class='container'>
+<div class='header'><h1>🔒 RAVEN-X Enterprise Security Report</h1>
+<p>Host: {self.system_info.get('hostname','N/A')} | Scan ID: {self.scan_id} | {datetime.now().strftime('%Y-%m-%d %H:%M')} | Risk: {pct}% – {level}</p></div>
+<div class='kpi'>
+<div class='kpi-card' style='border-color:#e74c3c'><h3>Critical</h3><p style='font-size:30px;font-weight:bold;color:#e74c3c'>{sum(1 for v in vulns if v['severity']=='critical')}</p></div>
+<div class='kpi-card' style='border-color:#e67e22'><h3>High</h3><p style='font-size:30px;font-weight:bold;color:#e67e22'>{sum(1 for v in vulns if v['severity']=='high')}</p></div>
+<div class='kpi-card' style='border-color:#f39c12'><h3>Medium</h3><p style='font-size:30px;font-weight:bold;color:#f39c12'>{sum(1 for v in vulns if v['severity']=='medium')}</p></div>
+<div class='kpi-card' style='border-color:#95a5a6'><h3>Low</h3><p style='font-size:30px;font-weight:bold;color:#95a5a6'>{sum(1 for v in vulns if v['severity']=='low')}</p></div>
+<div class='kpi-card' style='border-color:#3498db'><h3>Risk Score</h3><p style='font-size:30px;font-weight:bold;color:#3498db'>{pct}%</p></div>
+</div>
+<h2>Detailed Findings</h2>
+<table><tr><th>#</th><th>Severity</th><th>Category</th><th>Title</th><th>Details</th><th>Remediation</th><th>Compliance Controls</th></tr>
+{rows}</table>
+<p style='color:#888;font-size:11px;margin-top:20px'>Generated by RAVEN-X Enterprise v4.0 | For authorized use only</p>
+</div></body></html>"""
 
-        total_score = sum(severity_scores.get(v['severity'], 0) for v in self.vulnerabilities)
-        max_possible = len(self.vulnerabilities) * 10
-        risk_percentage = (total_score / max_possible * 100) if max_possible > 0 else 0
-
-        if risk_percentage >= 70:
-            risk_level = "Critical Risk"
-        elif risk_percentage >= 40:
-            risk_level = "High Risk"
-        elif risk_percentage >= 20:
-            risk_level = "Medium Risk"
-        else:
-            risk_level = "Low Risk"
-
-        return round(risk_percentage, 1), risk_level
-
-    def generate_report(self, format='html'):
-        """Generate scan report in various formats"""
-        report = {
-            'scan_id': self.scan_id,
-            'scan_start': self.scan_start_time.isoformat() if self.scan_start_time else '',
-            'scan_end': self.scan_end_time.isoformat() if self.scan_end_time else '',
-            'duration': (self.scan_end_time - self.scan_start_time).total_seconds() if self.scan_start_time and self.scan_end_time else 0,
-            'system_info': self.system_info,
-            'vulnerabilities': self.vulnerabilities,
-            'summary': {
-                'total': len(self.vulnerabilities),
-                'critical': sum(1 for v in self.vulnerabilities if v['severity'] == 'critical'),
-                'high': sum(1 for v in self.vulnerabilities if v['severity'] == 'high'),
-                'medium': sum(1 for v in self.vulnerabilities if v['severity'] == 'medium'),
-                'low': sum(1 for v in self.vulnerabilities if v['severity'] == 'low')
-            },
-            'risk_score': self.calculate_risk_score()[0],
-            'risk_level': self.calculate_risk_score()[1]
-        }
-
-        if format == 'json':
-            return json.dumps(report, indent=2, default=str)
-
-        elif format == 'html':
-            return self._generate_html_report(report)
-
-        elif format == 'csv':
-            return self._generate_csv_report(report)
-
-        return report
-
-    def _generate_html_report(self, report):
-        """Generate HTML report"""
-        html_template = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>RAVEN-X Security Scan Report</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f7fa; }}
-                .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                .header {{ background: #2c3e50; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }}
-                .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
-                .summary-card {{ background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid; }}
-                .critical {{ border-color: #e74c3c; }}
-                .high {{ border-color: #e67e22; }}
-                .medium {{ border-color: #f39c12; }}
-                .low {{ border-color: #95a5a6; }}
-                .vulnerability {{ margin: 15px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
-                .severity-critical {{ background: #ffeaea; border-left: 4px solid #e74c3c; }}
-                .severity-high {{ background: #fff3e6; border-left: 4px solid #e67e22; }}
-                .severity-medium {{ background: #fff9e6; border-left: 4px solid #f39c12; }}
-                .severity-low {{ background: #f8f9fa; border-left: 4px solid #95a5a6; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
-                th {{ background-color: #f2f2f2; }}
-                .risk-meter {{ height: 30px; background: linear-gradient(to right, #27ae60, #f39c12, #e74c3c); margin: 20px 0; border-radius: 15px; position: relative; }}
-                .risk-indicator {{ position: absolute; top: -10px; width: 3px; height: 50px; background: black; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🔒 RAVEN-X Security Scan Report</h1>
-                    <p>Scan ID: {report['scan_id']} | {report['scan_start'][:19]} | Duration: {report['duration']:.1f}s</p>
-                </div>
-
-                <h2>📊 System Summary</h2>
-                <table>
-                    <tr><th>Hostname</th><td>{report['system_info'].get('hostname', 'N/A')}</td></tr>
-                    <tr><th>OS Version</th><td>{report['system_info'].get('os_version', 'N/A')}</td></tr>
-                    <tr><th>Architecture</th><td>{report['system_info'].get('architecture', 'N/A')}</td></tr>
-                    <tr><th>Risk Score</th><td>{report['risk_score']}% - {report['risk_level']}</td></tr>
-                </table>
-
-                <h2>📈 Vulnerability Summary</h2>
-                <div class="summary">
-                    <div class="summary-card critical">
-                        <h3>Critical</h3>
-                        <p style="font-size: 24px; font-weight: bold; color: #e74c3c;">{report['summary']['critical']}</p>
-                    </div>
-                    <div class="summary-card high">
-                        <h3>High</h3>
-                        <p style="font-size: 24px; font-weight: bold; color: #e67e22;">{report['summary']['high']}</p>
-                    </div>
-                    <div class="summary-card medium">
-                        <h3>Medium</h3>
-                        <p style="font-size: 24px; font-weight: bold; color: #f39c12;">{report['summary']['medium']}</p>
-                    </div>
-                    <div class="summary-card low">
-                        <h3>Low</h3>
-                        <p style="font-size: 24px; font-weight: bold; color: #95a5a6;">{report['summary']['low']}</p>
-                    </div>
-                </div>
-
-                <div class="risk-meter">
-                    <div class="risk-indicator" style="left: {report['risk_score']}%;"></div>
-                </div>
-                <p style="text-align: center;">Risk Level: {report['risk_score']}%</p>
-
-                <h2>🔍 Detailed Vulnerabilities</h2>
-        """
-
-        for i, vuln in enumerate(report['vulnerabilities'], 1):
-            severity_class = f"severity-{vuln['severity']}"
-            html_template += f"""
-                <div class="vulnerability {severity_class}">
-                    <h3>{i}. {vuln['title']}</h3>
-                    <p><strong>Severity:</strong> <span style="color: {self._get_severity_color(vuln['severity'])}">{vuln['severity'].upper()}</span></p>
-                    <p><strong>Category:</strong> {vuln['category']}</p>
-                    <p><strong>Component:</strong> {vuln['component']}</p>
-                    <p><strong>Details:</strong> {vuln['details']}</p>
-                    <p><strong>Remediation:</strong> {vuln.get('remediation', 'No specific remediation provided.')}</p>
-                </div>
-            """
-
-        html_template += """
-                <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
-                    <p>Report generated by RAVEN-X Security Scanner v3.0</p>
-                    <p>⚠️ This report is for authorized security assessment purposes only.</p>
-                    <p>© 2024 RAVEN-X. All rights reserved.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-
-        return html_template
-
-    def _generate_csv_report(self, report):
-        """Generate CSV report"""
-        import io
-        import csv
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-
-        # Write header
-        writer.writerow(['RAVEN-X Security Scan Report'])
-        writer.writerow(['Scan ID:', report['scan_id']])
-        writer.writerow(['Scan Start:', report['scan_start']])
-        writer.writerow(['Scan End:', report['scan_end']])
-        writer.writerow(['Duration (s):', report['duration']])
-        writer.writerow(['Hostname:', report['system_info'].get('hostname', 'N/A')])
-        writer.writerow(['Risk Score:', f"{report['risk_score']}%"])
-        writer.writerow(['Risk Level:', report['risk_level']])
-        writer.writerow([])
-
-        # Write summary
-        writer.writerow(['VULNERABILITY SUMMARY'])
-        writer.writerow(['Critical', report['summary']['critical']])
-        writer.writerow(['High', report['summary']['high']])
-        writer.writerow(['Medium', report['summary']['medium']])
-        writer.writerow(['Low', report['summary']['low']])
-        writer.writerow(['Total', report['summary']['total']])
-        writer.writerow([])
-
-        # Write vulnerabilities
-        writer.writerow(['DETAILED VULNERABILITIES'])
-        writer.writerow(['#', 'Severity', 'Title', 'Category', 'Component', 'Details', 'Remediation'])
-
-        for i, vuln in enumerate(report['vulnerabilities'], 1):
-            writer.writerow([
-                i,
-                vuln['severity'].upper(),
-                vuln['title'],
-                vuln['category'],
-                vuln['component'],
-                vuln['details'],
-                vuln.get('remediation', '')
-            ])
-
-        return output.getvalue()
-
-    def _get_severity_color(self, severity):
-        """Get color for severity level"""
-        colors = {
-            'critical': '#e74c3c',
-            'high': '#e67e22',
-            'medium': '#f39c12',
-            'low': '#95a5a6'
-        }
-        return colors.get(severity, '#000000')
-
-
+# ══════════════════════════════════════════════════════════════════════════
+# GUI
+# ══════════════════════════════════════════════════════════════════════════
 class VulnerabilityGUI:
+    # ── init ────────────────────────────────────────────────────────────────
     def __init__(self):
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
-
         self.root = ctk.CTk()
-        self.root.title("RAVEN-X Security Scanner v3.0")
-        self.root.geometry("1400x900")
-
-        # Center window on screen
+        self.root.title("RAVEN-X Enterprise v4.0")
+        self.root.geometry("1440x920")
+        # centre window
         self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f'{width}x{height}+{x}+{y}')
+        w,h = self.root.winfo_width(), self.root.winfo_height()
+        self.root.geometry(f"{w}x{h}+{(self.root.winfo_screenwidth()-w)//2}+{(self.root.winfo_screenheight()-h)//2}")
 
-        self.scanner = VulnerabilityScanner()
+        self.scanner      = VulnerabilityScanner()
+        self.db           = DB()
         self.vulnerabilities = []
-        self.is_scanning = False
-        self.scheduled_scans = []
-
-        # Configuration
-        self.config = {
-            'lm_studio_url': "http://localhost:1234/v1",
-            'model_name': "llama-3.1-8b",
-            'safe_mode': True,  # Only report, don't fix
-            'auto_create_restore': True,
-            'schedule_interval': 24,  # Hours
-            'export_format': 'html'
-        }
-
-        # Modern color scheme
-        self.colors = {
-            'bg_primary': '#f5f7fa',
-            'bg_secondary': '#ffffff',
-            'bg_sidebar': '#2c3e50',
-            'accent': '#3498db',
-            'accent_hover': '#2980b9',
-            'text_primary': '#2c3e50',
-            'text_secondary': '#7f8c8d',
-            'border': '#e1e8ed',
-            'critical': '#e74c3c',
-            'high': '#e67e22',
-            'medium': '#f39c12',
-            'low': '#95a5a6',
-            'success': '#27ae60',
-            'warning': '#f1c40f'
-        }
-
-        self.create_widgets()
-
-    def create_widgets(self):
-        # Main container with sidebar layout
-        main_container = ctk.CTkFrame(self.root, fg_color=self.colors['bg_primary'])
-        main_container.pack(fill="both", expand=True)
-
-        # ==================== LEFT SIDEBAR ====================
-        sidebar = ctk.CTkFrame(main_container, width=320, fg_color=self.colors['bg_sidebar'], corner_radius=0)
-        sidebar.pack(side="left", fill="y", padx=0, pady=0)
-        sidebar.pack_propagate(False)
-
-        # Logo/Header in sidebar
-        logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        logo_frame.pack(pady=(30, 20), padx=20)
-
-        app_title = ctk.CTkLabel(logo_frame, text="RAVEN-X",
-                                font=("Segoe UI", 28, "bold"),
-                                text_color="#ffffff")
-        app_title.pack()
-
-        subtitle = ctk.CTkLabel(logo_frame, text="Security Scanner v3.0",
-                               font=("Segoe UI", 13),
-                               text_color="#bdc3c7")
-        subtitle.pack(pady=(0, 5))
-
-        version = ctk.CTkLabel(logo_frame, text="Professional Edition",
-                              font=("Segoe UI", 10),
-                              text_color="#7f8c8d")
-        version.pack()
-
-        # Scan Progress
-        self.progress_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        self.progress_frame.pack(pady=10, padx=20, fill="x")
-
-        self.progress_label = ctk.CTkLabel(self.progress_frame, text="",
-                                          font=("Segoe UI", 10),
-                                          text_color="#bdc3c7")
-        self.progress_label.pack()
-
-        self.progress_bar = ctk.CTkProgressBar(self.progress_frame, height=8)
-        self.progress_bar.pack(fill="x", pady=(5, 0))
-        self.progress_bar.set(0)
-
-        # Scan button in sidebar
-        scan_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        scan_frame.pack(pady=20, padx=20, fill="x")
-
-        self.scan_button = ctk.CTkButton(scan_frame, text="🔍 Start Security Scan",
-                                        command=self.start_scan,
-                                        font=("Segoe UI", 14, "bold"),
-                                        height=50,
-                                        fg_color=self.colors['accent'],
-                                        hover_color=self.colors['accent_hover'],
-                                        corner_radius=8)
-        self.scan_button.pack(fill="x")
-
-        # Quick scan button
-        self.quick_scan_button = ctk.CTkButton(scan_frame, text="⚡ Quick Scan",
-                                              command=self.start_quick_scan,
-                                              font=("Segoe UI", 12),
-                                              height=40,
-                                              fg_color=self.colors['medium'],
-                                              hover_color="#e67e22",
-                                              corner_radius=8)
-        self.quick_scan_button.pack(fill="x", pady=(10, 0))
-
-        # Quick stats (will update after scan)
-        stats_frame = ctk.CTkFrame(sidebar, fg_color="#34495e", corner_radius=10)
-        stats_frame.pack(pady=20, padx=20, fill="x")
-
-        stats_title = ctk.CTkLabel(stats_frame, text="Scan Summary",
-                                  font=("Segoe UI", 12, "bold"),
-                                  text_color="#ffffff")
-        stats_title.pack(pady=(15, 10))
-
-        self.risk_score_label = ctk.CTkLabel(stats_frame, text="Risk: 0%",
-                                           font=("Segoe UI", 16, "bold"),
-                                           text_color="#ffffff")
-        self.risk_score_label.pack(pady=(0, 10))
-
-        self.stats_critical = ctk.CTkLabel(stats_frame, text="🔴 Critical: 0",
-                                          font=("Segoe UI", 11),
-                                          text_color="#e74c3c")
-        self.stats_critical.pack(pady=3)
-
-        self.stats_high = ctk.CTkLabel(stats_frame, text="🟠 High: 0",
-                                      font=("Segoe UI", 11),
-                                      text_color="#e67e22")
-        self.stats_high.pack(pady=3)
-
-        self.stats_medium = ctk.CTkLabel(stats_frame, text="🟡 Medium: 0",
-                                        font=("Segoe UI", 11),
-                                        text_color="#f39c12")
-        self.stats_medium.pack(pady=3)
-
-        self.stats_low = ctk.CTkLabel(stats_frame, text="⚪ Low: 0",
-                                     font=("Segoe UI", 11),
-                                     text_color="#95a5a6")
-        self.stats_low.pack(pady=3)
-
-        self.stats_total = ctk.CTkLabel(stats_frame, text="Total Issues: 0",
-                                       font=("Segoe UI", 12, "bold"),
-                                       text_color="#ffffff")
-        self.stats_total.pack(pady=(10, 15))
-
-        # Action buttons in sidebar
-        action_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        action_frame.pack(pady=10, padx=20, fill="x")
-
-        self.ai_button = ctk.CTkButton(action_frame, text="🤖 AI Analysis",
-                                      command=self.get_ai_analysis,
-                                      font=("Segoe UI", 12),
-                                      height=40,
-                                      state="disabled",
-                                      fg_color="#9b59b6",
-                                      hover_color="#8e44ad",
-                                      corner_radius=8)
-        self.ai_button.pack(fill="x", pady=5)
-
-        self.fix_button = ctk.CTkButton(action_frame, text="🔧 Fix Issues",
-                                       command=self.fix_vulnerabilities,
-                                       font=("Segoe UI", 12),
-                                       height=40,
-                                       state="disabled",
-                                       fg_color=self.colors['success'],
-                                       hover_color="#229954",
-                                       corner_radius=8)
-        self.fix_button.pack(fill="x", pady=5)
-
-        self.export_button = ctk.CTkButton(action_frame, text="📤 Export Report",
-                                          command=self.export_report,
-                                          font=("Segoe UI", 12),
-                                          height=40,
-                                          state="disabled",
-                                          fg_color=self.colors['accent'],
-                                          hover_color=self.colors['accent_hover'],
-                                          corner_radius=8)
-        self.export_button.pack(fill="x", pady=5)
-
-        # Safe mode toggle
-        safe_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        safe_frame.pack(pady=20, padx=20, fill="x")
-
-        self.safe_mode_var = ctk.BooleanVar(value=self.config['safe_mode'])
-        self.safe_mode_switch = ctk.CTkSwitch(safe_frame, text="🛡️ Safe Mode",
-                                             variable=self.safe_mode_var,
-                                             command=self.toggle_safe_mode,
-                                             font=("Segoe UI", 11),
-                                             fg_color=self.colors['success'])
-        self.safe_mode_switch.pack()
-
-        # ==================== RIGHT CONTENT AREA ====================
-        content_area = ctk.CTkFrame(main_container, fg_color=self.colors['bg_primary'])
-        content_area.pack(side="right", fill="both", expand=True, padx=0, pady=0)
-
-        # Top header bar
-        header_bar = ctk.CTkFrame(content_area, fg_color=self.colors['bg_secondary'],
-                                 height=80, corner_radius=0)
-        header_bar.pack(fill="x", padx=20, pady=(20, 0))
-        header_bar.pack_propagate(False)
-
-        header_content = ctk.CTkFrame(header_bar, fg_color="transparent")
-        header_content.pack(fill="both", expand=True, padx=25, pady=15)
-
-        header_title = ctk.CTkLabel(header_content, text="Security Assessment Dashboard",
-                                   font=("Segoe UI", 22, "bold"),
-                                   text_color=self.colors['text_primary'])
-        header_title.pack(anchor="w")
-
-        self.status_label = ctk.CTkLabel(header_content, text="Ready to scan",
-                                        font=("Segoe UI", 12),
-                                        text_color=self.colors['text_secondary'])
-        self.status_label.pack(anchor="w", pady=(5, 0))
-
-        # Tabview for different sections
-        self.tabview = ctk.CTkTabview(content_area, fg_color=self.colors['bg_primary'])
-        self.tabview.pack(fill="both", expand=True, padx=20, pady=15)
-
-        # Scan Results Tab
-        self.scan_tab = self.tabview.add("📊 Scan Results")
-        self.setup_scan_tab()
-
-        # AI Configuration Tab
-        self.ai_tab = self.tabview.add("🤖 AI Configuration")
-        self.setup_ai_tab()
-
-        # Settings Tab
-        self.settings_tab = self.tabview.add("⚙️ Settings")
-        self.setup_settings_tab()
-
-        # System Info Tab
-        self.system_tab = self.tabview.add("💻 System Info")
-        self.setup_system_tab()
-
-    def setup_scan_tab(self):
-        """Setup scan results tab"""
-        # Results area
-        results_frame = ctk.CTkFrame(self.scan_tab, fg_color=self.colors['bg_secondary'], corner_radius=10)
-        results_frame.pack(fill="both", expand=True, padx=0, pady=0)
-
-        # Results header with filter buttons
-        results_header = ctk.CTkFrame(results_frame, fg_color=self.colors['bg_secondary'])
-        results_header.pack(fill="x", padx=20, pady=15)
-
-        results_title = ctk.CTkLabel(results_header, text="Scan Results",
-                                    font=("Segoe UI", 16, "bold"),
-                                    text_color=self.colors['text_primary'])
-        results_title.pack(side="left")
-
-        # Filter buttons
-        filter_frame = ctk.CTkFrame(results_header, fg_color="transparent")
-        filter_frame.pack(side="right")
-
-        self.filter_all = ctk.CTkButton(filter_frame, text="All",
-                                       width=70, height=30,
-                                       command=lambda: self.filter_results('all'),
-                                       fg_color=self.colors['accent'],
-                                       hover_color=self.colors['accent_hover'])
-        self.filter_all.pack(side="left", padx=2)
-
-        self.filter_critical = ctk.CTkButton(filter_frame, text="Critical",
-                                           width=70, height=30,
-                                           command=lambda: self.filter_results('critical'),
-                                           fg_color=self.colors['critical'],
-                                           hover_color="#c0392b")
-        self.filter_critical.pack(side="left", padx=2)
-
-        self.filter_high = ctk.CTkButton(filter_frame, text="High",
-                                        width=70, height=30,
-                                        command=lambda: self.filter_results('high'),
-                                        fg_color=self.colors['high'],
-                                        hover_color="#d35400")
-        self.filter_high.pack(side="left", padx=2)
-
-        # Scrollable text area with better formatting
-        text_container = ctk.CTkFrame(results_frame, fg_color=self.colors['bg_primary'])
-        text_container.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
-        self.results_text = ctk.CTkTextbox(text_container,
-                                          font=("Consolas", 11),
-                                          fg_color="#fafbfc",
-                                          text_color=self.colors['text_primary'],
-                                          border_width=1,
-                                          border_color=self.colors['border'],
-                                          corner_radius=6,
-                                          wrap="word")
-        self.results_text.pack(fill="both", expand=True)
-
-        # Initial message
-        welcome_msg = """╔══════════════════════════════════════════════════════════════╗
-║                    RAVEN-X Security Scanner v3.0                   ║
-╚══════════════════════════════════════════════════════════════╝
-
-Welcome to RAVEN-X Security Scanner!
-
-This professional security assessment tool will scan your Windows system 
-for vulnerabilities across multiple categories:
-
-🔹 Windows Updates & Patches
-🔹 Firewall Configuration
-🔹 Antivirus & Malware Protection
-🔹 User Account Security
-🔹 Network Security & Ports
-🔹 Disk Encryption (BitLocker)
-🔹 Password Policies
-🔹 Audit & Logging Settings
-🔹 Software Versions
-🔹 Startup Programs
-🔹 File Integrity
-🔹 Service Configuration
-
-⚠️  IMPORTANT DISCLAIMER:
-This tool is for authorized security testing only.
-Always ensure you have proper permissions before scanning systems.
-
-Click "Start Security Scan" to begin the assessment.
-"""
-        self.results_text.insert("1.0", welcome_msg)
-        self.results_text.configure(state="disabled")
-
-    def setup_ai_tab(self):
-        """Setup AI configuration tab"""
-        ai_frame = ctk.CTkFrame(self.ai_tab, fg_color=self.colors['bg_secondary'], corner_radius=10)
-        ai_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # LLM Configuration Section
-        config_header = ctk.CTkFrame(ai_frame, fg_color="transparent")
-        config_header.pack(fill="x", padx=20, pady=(20, 10))
-
-        config_title = ctk.CTkLabel(config_header, text="AI Configuration",
-                                   font=("Segoe UI", 16, "bold"),
-                                   text_color=self.colors['text_primary'])
-        config_title.pack(side="left")
-
-        config_content = ctk.CTkFrame(ai_frame, fg_color="transparent")
-        config_content.pack(fill="x", padx=20, pady=(0, 20))
-
-        # URL input
-        url_label = ctk.CTkLabel(config_content, text="LM Studio URL:",
-                                font=("Segoe UI", 12),
-                                text_color=self.colors['text_secondary'])
-        url_label.grid(row=0, column=0, sticky="w", padx=(0, 10), pady=10)
-
-        self.url_entry = ctk.CTkEntry(config_content, width=400, height=40,
-                                      font=("Segoe UI", 11),
-                                      border_color=self.colors['border'])
-        self.url_entry.insert(0, self.config['lm_studio_url'])
-        self.url_entry.grid(row=0, column=1, padx=5, pady=10, sticky="w", columnspan=3)
-
-        # Model input
-        model_label = ctk.CTkLabel(config_content, text="Model Name:",
-                                  font=("Segoe UI", 12),
-                                  text_color=self.colors['text_secondary'])
-        model_label.grid(row=1, column=0, sticky="w", padx=(0, 10), pady=10)
-
-        self.model_entry = ctk.CTkEntry(config_content, width=300, height=40,
-                                       font=("Segoe UI", 11),
-                                       border_color=self.colors['border'])
-        self.model_entry.insert(0, self.config['model_name'])
-        self.model_entry.grid(row=1, column=1, padx=5, pady=10, sticky="w")
-
-        # Test button
-        self.test_btn = ctk.CTkButton(config_content, text="Test Connection",
-                                     command=self.test_connection,
-                                     width=140, height=40,
-                                     font=("Segoe UI", 11),
-                                     fg_color=self.colors['accent'],
-                                     hover_color=self.colors['accent_hover'],
-                                     corner_radius=8)
-        self.test_btn.grid(row=1, column=2, padx=20, pady=10)
-
-        # Connection status
-        self.connection_status = ctk.CTkLabel(config_content, text="● Not tested",
-                                             font=("Segoe UI", 11),
-                                             text_color=self.colors['medium'])
-        self.connection_status.grid(row=1, column=3, padx=10, pady=10)
-
-        # AI Analysis Examples
-        examples_frame = ctk.CTkFrame(ai_frame, fg_color="#f8f9fa", corner_radius=8)
-        examples_frame.pack(fill="x", padx=20, pady=20)
-
-        examples_label = ctk.CTkLabel(examples_frame, text="AI Analysis Examples",
-                                     font=("Segoe UI", 14, "bold"),
-                                     text_color=self.colors['text_primary'])
-        examples_label.pack(pady=(15, 10), padx=20, anchor="w")
-
-        examples_text = """The AI assistant can provide:
-
-1. Risk Assessment - Overall security posture analysis
-2. Prioritization - Which issues to fix first
-3. Step-by-Step Guides - Detailed remediation steps
-4. Compliance Mapping - How findings relate to standards
-5. Threat Modeling - Potential attack scenarios
-6. Best Practices - Industry security recommendations
-
-To get the best analysis:
-• Ensure LM Studio is running with a loaded model
-• Use models trained on security/code (like CodeLlama, Security-focused models)
-• The AI works best when vulnerabilities have been detected
-"""
-
-        examples_content = ctk.CTkTextbox(examples_frame, height=200,
-                                         font=("Segoe UI", 11),
-                                         fg_color="white",
-                                         text_color=self.colors['text_secondary'])
-        examples_content.pack(fill="x", padx=20, pady=(0, 20))
-        examples_content.insert("1.0", examples_text)
-        examples_content.configure(state="disabled")
-
-    def setup_settings_tab(self):
-        """Setup settings tab"""
-        settings_frame = ctk.CTkFrame(self.settings_tab, fg_color=self.colors['bg_secondary'], corner_radius=10)
-        settings_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # Settings header
-        settings_header = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        settings_header.pack(fill="x", padx=20, pady=(20, 10))
-
-        settings_title = ctk.CTkLabel(settings_header, text="Application Settings",
-                                     font=("Segoe UI", 16, "bold"),
-                                     text_color=self.colors['text_primary'])
-        settings_title.pack(side="left")
-
-        # Settings content
-        settings_content = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        settings_content.pack(fill="x", padx=20, pady=(0, 20))
-
-        # Auto-create restore point
-        self.restore_var = ctk.BooleanVar(value=self.config['auto_create_restore'])
-        restore_switch = ctk.CTkSwitch(settings_content, text="Auto-create restore point before fixes",
-                                      variable=self.restore_var,
-                                      font=("Segoe UI", 12),
-                                      fg_color=self.colors['success'])
-        restore_switch.grid(row=0, column=0, sticky="w", pady=10, columnspan=2)
-
-        # Schedule scans
-        schedule_label = ctk.CTkLabel(settings_content, text="Schedule scans (hours):",
-                                     font=("Segoe UI", 12),
-                                     text_color=self.colors['text_secondary'])
-        schedule_label.grid(row=1, column=0, sticky="w", pady=10)
-
-        self.schedule_entry = ctk.CTkEntry(settings_content, width=100, height=35,
-                                          font=("Segoe UI", 11))
-        self.schedule_entry.insert(0, str(self.config['schedule_interval']))
-        self.schedule_entry.grid(row=1, column=1, sticky="w", pady=10, padx=10)
-
-        schedule_btn = ctk.CTkButton(settings_content, text="Set Schedule",
-                                    command=self.set_schedule,
-                                    width=120, height=35)
-        schedule_btn.grid(row=1, column=2, sticky="w", pady=10, padx=10)
-
-        # Export format
-        export_label = ctk.CTkLabel(settings_content, text="Export format:",
-                                   font=("Segoe UI", 12),
-                                   text_color=self.colors['text_secondary'])
-        export_label.grid(row=2, column=0, sticky="w", pady=10)
-
-        self.export_format = ctk.CTkOptionMenu(settings_content,
-                                              values=["HTML", "JSON", "CSV", "PDF"],
-                                              width=120, height=35)
-        self.export_format.set(self.config['export_format'].upper())
-        self.export_format.grid(row=2, column=1, sticky="w", pady=10, padx=10)
-
-        # Logging level
-        log_label = ctk.CTkLabel(settings_content, text="Logging level:",
-                                font=("Segoe UI", 12),
-                                text_color=self.colors['text_secondary'])
-        log_label.grid(row=3, column=0, sticky="w", pady=10)
-
-        self.log_level = ctk.CTkOptionMenu(settings_content,
-                                          values=["INFO", "WARNING", "ERROR", "DEBUG"],
-                                          width=120, height=35)
-        self.log_level.set("INFO")
-        self.log_level.grid(row=3, column=1, sticky="w", pady=10, padx=10)
-
-        # Save settings button
-        save_btn = ctk.CTkButton(settings_content, text="💾 Save Settings",
-                                command=self.save_settings,
-                                width=150, height=45,
-                                fg_color=self.colors['success'],
-                                hover_color="#229954",
-                                font=("Segoe UI", 12, "bold"))
-        save_btn.grid(row=4, column=0, pady=30, columnspan=3)
-
-        # Disclaimer
-        disclaimer_frame = ctk.CTkFrame(settings_frame, fg_color="#fff8e6", corner_radius=8)
-        disclaimer_frame.pack(fill="x", padx=20, pady=20)
-
-        disclaimer_text = """⚠️  DISCLAIMER & WARNING
-
-This tool performs system scans and can apply security fixes.
-By using this tool, you acknowledge and agree that:
-
-1. You have proper authorization to scan the target system
-2. You understand the risks of applying automated fixes
-3. You have backed up important data before making changes
-4. The developers are not responsible for any system damage
-5. This tool is for legitimate security assessment only
-
-Always run in Safe Mode first to review findings before applying fixes.
-"""
-
-        disclaimer = ctk.CTkTextbox(disclaimer_frame, height=180,
-                                   font=("Segoe UI", 10),
-                                   fg_color="#fff8e6",
-                                   text_color="#e67e22")
-        disclaimer.pack(fill="both", padx=15, pady=15)
-        disclaimer.insert("1.0", disclaimer_text)
-        disclaimer.configure(state="disabled")
-
-    def setup_system_tab(self):
-        """Setup system information tab"""
-        system_frame = ctk.CTkFrame(self.system_tab, fg_color=self.colors['bg_secondary'], corner_radius=10)
-        system_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # System info header
-        system_header = ctk.CTkFrame(system_frame, fg_color="transparent")
-        system_header.pack(fill="x", padx=20, pady=(20, 10))
-
-        system_title = ctk.CTkLabel(system_header, text="System Information",
-                                   font=("Segoe UI", 16, "bold"),
-                                   text_color=self.colors['text_primary'])
-        system_title.pack(side="left")
-
-        refresh_btn = ctk.CTkButton(system_header, text="🔄 Refresh",
-                                   command=self.refresh_system_info,
-                                   width=100, height=35)
-        refresh_btn.pack(side="right")
-
-        # System info content
-        self.system_text = ctk.CTkTextbox(system_frame,
-                                         font=("Consolas", 11),
-                                         fg_color="#fafbfc",
-                                         text_color=self.colors['text_primary'],
-                                         border_width=1,
-                                         border_color=self.colors['border'],
-                                         corner_radius=6)
-        self.system_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
-        # Initial system info
-        self.refresh_system_info()
-
-    def refresh_system_info(self):
-        """Refresh and display system information"""
-        try:
-            import psutil
-            import platform
-
-            system_info = f"""
-╔══════════════════════════════════════════════════════════════╗
-║                      SYSTEM INFORMATION                      ║
-╚══════════════════════════════════════════════════════════════╝
-
-Operating System:
-    System: {platform.system()} {platform.release()}
-    Version: {platform.version()}
-    Architecture: {platform.architecture()[0]}
-
-Computer Details:
-    Hostname: {socket.gethostname()}
-    Processor: {platform.processor()}
-    Machine: {platform.machine()}
-
-Hardware Information:
-"""
-            # CPU info
-            cpu_count = psutil.cpu_count(logical=True)
-            cpu_percent = psutil.cpu_percent(interval=1)
-            system_info += f"    CPU Cores: {cpu_count} (Logical)\n"
-            system_info += f"    CPU Usage: {cpu_percent}%\n"
-
-            # Memory info
-            mem = psutil.virtual_memory()
-            system_info += f"    Total RAM: {mem.total // (1024**3)} GB\n"
-            system_info += f"    Available RAM: {mem.available // (1024**3)} GB\n"
-            system_info += f"    RAM Usage: {mem.percent}%\n"
-
-            # Disk info
-            disk = psutil.disk_usage('/')
-            system_info += f"    Total Disk: {disk.total // (1024**3)} GB\n"
-            system_info += f"    Used Disk: {disk.used // (1024**3)} GB\n"
-            system_info += f"    Free Disk: {disk.free // (1024**3)} GB\n"
-
-            # Network info
-            system_info += "\nNetwork Information:\n"
+        self.is_scanning  = False
+        self.config       = self._load_config()
+        self.email_mgr    = EmailManager(self.config)
+
+        self.C = dict(
+            bg_primary="#f5f7fa", bg_secondary="#ffffff",
+            sidebar="#2c3e50", accent="#3498db", accent_hover="#2980b9",
+            text_primary="#2c3e50", text_secondary="#7f8c8d",
+            border="#e1e8ed", critical="#e74c3c", high="#e67e22",
+            medium="#f39c12", low="#95a5a6", success="#27ae60", warning="#f1c40f"
+        )
+        self._build_ui()
+        if not is_admin():
+            self.root.after(200, self._warn_admin)
+
+    def _load_config(self):
+        defaults = dict(
+            lm_studio_url="http://localhost:1234/v1", model_name="llama-3.1-8b",
+            safe_mode=True, auto_create_restore=True, schedule_interval=24,
+            export_format="html", smtp_server="smtp.gmail.com", smtp_port=587,
+            smtp_user="", smtp_pass="", email_recipients="", alert_on_critical=True
+        )
+        if os.path.exists(CONFIG_FILE):
             try:
-                hostname = socket.gethostname()
-                ip_address = socket.gethostbyname(hostname)
-                system_info += f"    IP Address: {ip_address}\n"
-            except:
-                system_info += "    IP Address: Not available\n"
+                with open(CONFIG_FILE) as f: defaults.update(json.load(f))
+            except: pass
+        return defaults
 
-            # Python info
-            system_info += f"""
-Python Environment:
-    Python Version: {platform.python_version()}
-    Python Implementation: {platform.python_implementation()}
+    def _save_config(self):
+        with open(CONFIG_FILE,"w") as f: json.dump(self.config,f,indent=2)
 
-RAVEN-X Information:
-    Scan ID: {self.scanner.scan_id}
-    Version: 3.0 Professional
-    Safe Mode: {'Enabled' if self.config['safe_mode'] else 'Disabled'}
+    def _warn_admin(self):
+        if messagebox.askyesno("Admin Required",
+            "Running without admin rights. Some checks will be limited.\n\nRestart as Administrator?",
+            parent=self.root):
+            ctypes.windll.shell32.ShellExecuteW(None,"runas",sys.executable," ".join(sys.argv),None,1)
+            sys.exit()
+
+    # ── UI scaffold ─────────────────────────────────────────────────────────
+    def _build_ui(self):
+        main = ctk.CTkFrame(self.root, fg_color=self.C["bg_primary"])
+        main.pack(fill="both", expand=True)
+
+        # ── sidebar ──────────────────────────────────────────────────────────
+        sb = ctk.CTkFrame(main, width=340, fg_color=self.C["sidebar"], corner_radius=0)
+        sb.pack(side="left", fill="y"); sb.pack_propagate(False)
+
+        ctk.CTkLabel(sb, text="RAVEN-X", font=("Segoe UI",30,"bold"),
+                     text_color="#fff").pack(pady=(30,2))
+        ctk.CTkLabel(sb, text="Enterprise v4.0", font=("Segoe UI",12),
+                     text_color="#bdc3c7").pack()
+        ctk.CTkLabel(sb, text="AI-Powered Security Scanner", font=("Segoe UI",9),
+                     text_color="#7f8c8d").pack(pady=(0,20))
+
+        # progress
+        self._prog_lbl = ctk.CTkLabel(sb, text="", font=("Segoe UI",10), text_color="#bdc3c7")
+        self._prog_lbl.pack(padx=20, fill="x")
+        self._prog_bar = ctk.CTkProgressBar(sb, height=8)
+        self._prog_bar.pack(padx=20, fill="x", pady=(4,15)); self._prog_bar.set(0)
+
+        # scan buttons
+        for text, cmd, fg, hov in [
+            ("🔍  Start Full Scan", self.start_scan, self.C["accent"], self.C["accent_hover"]),
+            ("⚡  Quick Scan",      self.start_quick_scan, self.C["medium"], "#e67e22"),
+        ]:
+            ctk.CTkButton(sb, text=text, command=cmd, height=46, font=("Segoe UI",13,"bold"),
+                          fg_color=fg, hover_color=hov, corner_radius=8
+                          ).pack(padx=20, fill="x", pady=4)
+
+        # stats box
+        stats_box = ctk.CTkFrame(sb, fg_color="#34495e", corner_radius=10)
+        stats_box.pack(padx=20, pady=15, fill="x")
+        ctk.CTkLabel(stats_box, text="Last Scan Summary", font=("Segoe UI",11,"bold"),
+                     text_color="#fff").pack(pady=(12,6))
+        self._risk_lbl    = ctk.CTkLabel(stats_box, text="Risk: –", font=("Segoe UI",18,"bold"), text_color="#fff")
+        self._risk_lbl.pack()
+        self._stats = {}
+        for sev,color,sym in [("critical","#e74c3c","🔴"),("high","#e67e22","🟠"),
+                               ("medium","#f39c12","🟡"),("low","#95a5a6","⚪")]:
+            lbl = ctk.CTkLabel(stats_box, text=f"{sym} {sev.capitalize()}: 0",
+                               font=("Segoe UI",11), text_color=color)
+            lbl.pack(pady=2); self._stats[sev] = lbl
+        self._total_lbl = ctk.CTkLabel(stats_box, text="Total Issues: 0",
+                                       font=("Segoe UI",12,"bold"), text_color="#fff")
+        self._total_lbl.pack(pady=(8,14))
+
+        # action buttons
+        actions = [
+            ("🤖  AI Analysis",     self.get_ai_analysis, "#9b59b6","#8e44ad","ai"),
+            ("🔧  Fix Issues",      self.fix_vulnerabilities, self.C["success"],"#229954","fix"),
+            ("📤  Export Report",   self.export_report, self.C["accent"],self.C["accent_hover"],"export"),
+            ("📜  Generate Script", self.generate_remediation_script, "#f39c12","#e67e22","script"),
+            ("📋  Copy Results",    self.copy_results, "#7f8c8d","#95a5a6","copy"),
+        ]
+        self._btns = {}
+        for text, cmd, fg, hov, key in actions:
+            b = ctk.CTkButton(sb, text=text, command=cmd, height=38,
+                              font=("Segoe UI",11), state="disabled",
+                              fg_color=fg, hover_color=hov, corner_radius=8)
+            b.pack(padx=20, fill="x", pady=3); self._btns[key] = b
+
+        # safe mode
+        self._safe_var = ctk.BooleanVar(value=self.config["safe_mode"])
+        ctk.CTkSwitch(sb, text="🛡️  Safe Mode (review only)",
+                      variable=self._safe_var, command=self._toggle_safe,
+                      font=("Segoe UI",10), fg_color=self.C["success"]
+                      ).pack(padx=20, pady=15)
+
+        # ── right panel ───────────────────────────────────────────────────
+        right = ctk.CTkFrame(main, fg_color=self.C["bg_primary"])
+        right.pack(side="right", fill="both", expand=True)
+
+        hbar = ctk.CTkFrame(right, fg_color=self.C["bg_secondary"], height=76, corner_radius=0)
+        hbar.pack(fill="x", padx=20, pady=(20,0)); hbar.pack_propagate(False)
+        hc = ctk.CTkFrame(hbar, fg_color="transparent")
+        hc.pack(fill="both", expand=True, padx=25, pady=10)
+        ctk.CTkLabel(hc, text="Security Assessment Dashboard",
+                     font=("Segoe UI",20,"bold"), text_color=self.C["text_primary"]).pack(anchor="w")
+        self._status_lbl = ctk.CTkLabel(hc, text="Ready – click Scan to begin",
+                                        font=("Segoe UI",11), text_color=self.C["text_secondary"])
+        self._status_lbl.pack(anchor="w", pady=(3,0))
+
+        # tabs
+        self.tabs = ctk.CTkTabview(right, fg_color=self.C["bg_primary"])
+        self.tabs.pack(fill="both", expand=True, padx=20, pady=12)
+        for name in ["📊 Results","🤖 AI Config","📋 Compliance",
+                     "📈 History","💼 Executive","⚙️ Settings","💻 System"]:
+            self.tabs.add(name)
+
+        self._setup_results_tab()
+        self._setup_ai_tab()
+        self._setup_compliance_tab()
+        self._setup_history_tab()
+        self._setup_executive_tab()
+        self._setup_settings_tab()
+        self._setup_system_tab()
+
+    # ── tab builders ─────────────────────────────────────────────────────────
+    def _textbox(self, parent, **kw):
+        defaults = dict(font=("Consolas",11), fg_color="#fafbfc",
+                        text_color=self.C["text_primary"],
+                        border_width=1, border_color=self.C["border"],
+                        corner_radius=6, wrap="word")
+        defaults.update(kw)
+        return ctk.CTkTextbox(parent, **defaults)
+
+    def _setup_results_tab(self):
+        tab = self.tabs.tab("📊 Results")
+        f   = ctk.CTkFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        f.pack(fill="both", expand=True)
+        hdr = ctk.CTkFrame(f, fg_color="transparent")
+        hdr.pack(fill="x", padx=20, pady=12)
+        ctk.CTkLabel(hdr, text="Scan Results", font=("Segoe UI",15,"bold"),
+                     text_color=self.C["text_primary"]).pack(side="left")
+        flt = ctk.CTkFrame(hdr, fg_color="transparent"); flt.pack(side="right")
+        for label, sev, fg in [("All","all",self.C["accent"]),("Critical","critical",self.C["critical"]),
+                                ("High","high",self.C["high"]),("Medium","medium",self.C["medium"])]:
+            ctk.CTkButton(flt, text=label, width=72, height=28,
+                          command=lambda s=sev: self._filter(s),
+                          fg_color=fg, hover_color="#555").pack(side="left", padx=2)
+        self._res_txt = self._textbox(f)
+        self._res_txt.pack(fill="both", expand=True, padx=20, pady=(0,20))
+        self._res_txt.insert("1.0", WELCOME_MSG)
+        self._res_txt.configure(state="disabled")
+
+    def _setup_ai_tab(self):
+        tab = self.tabs.tab("🤖 AI Config")
+        f   = ctk.CTkFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        f.pack(fill="both", expand=True, padx=20, pady=20)
+        form = ctk.CTkFrame(f, fg_color="transparent")
+        form.pack(fill="x", padx=20, pady=20)
+        for row,(lbl,key,show) in enumerate([("LM Studio URL:","lm_studio_url",""),
+                                              ("Model Name:","model_name","")]):
+            ctk.CTkLabel(form, text=lbl, font=("Segoe UI",12)).grid(row=row,column=0,sticky="w",pady=8)
+            e = ctk.CTkEntry(form, width=380, height=36, show=show,
+                             border_color=self.C["border"])
+            e.insert(0, self.config[key])
+            e.grid(row=row, column=1, padx=10, pady=8, sticky="w")
+            setattr(self, f"_ai_{key}", e)
+        self._conn_status = ctk.CTkLabel(form, text="● Not tested",
+                                         font=("Segoe UI",11), text_color=self.C["medium"])
+        self._conn_status.grid(row=0, column=2, padx=10)
+        ctk.CTkButton(form, text="Test Connection", width=140, height=36,
+                      command=self._test_connection,
+                      fg_color=self.C["accent"], corner_radius=8
+                      ).grid(row=1, column=2, padx=10, pady=8)
+
+    def _setup_compliance_tab(self):
+        tab = self.tabs.tab("📋 Compliance")
+        f   = ctk.CTkFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        f.pack(fill="both", expand=True, padx=20, pady=20)
+        ctk.CTkLabel(f, text="Compliance Mapping", font=("Segoe UI",15,"bold"),
+                     text_color=self.C["text_primary"]).pack(anchor="w", padx=20, pady=(20,10))
+        # score cards
+        cards = ctk.CTkFrame(f, fg_color="transparent")
+        cards.pack(fill="x", padx=20, pady=10)
+        self._comp_cards = {}
+        for i,fw in enumerate(["CIS","NIST","ISO 27001","PCI-DSS"]):
+            card = ctk.CTkFrame(cards, fg_color="#f8f9fa", corner_radius=8, width=200)
+            card.grid(row=0,column=i,padx=8,pady=8,sticky="nsew")
+            ctk.CTkLabel(card, text=fw, font=("Segoe UI",13,"bold"),
+                         text_color=self.C["text_primary"]).pack(pady=(15,4))
+            sc = ctk.CTkLabel(card, text="–%", font=("Segoe UI",28,"bold"),
+                              text_color=self.C["accent"])
+            sc.pack()
+            st = ctk.CTkLabel(card, text="No scan yet", font=("Segoe UI",9),
+                              text_color=self.C["text_secondary"])
+            st.pack(pady=(2,15))
+            self._comp_cards[fw] = (sc,st)
+        for i in range(4): cards.grid_columnconfigure(i,weight=1)
+        # detail table
+        ctk.CTkLabel(f, text="Controls by Category", font=("Segoe UI",13,"bold"),
+                     text_color=self.C["text_primary"]).pack(anchor="w", padx=20, pady=(10,4))
+        self._comp_text = self._textbox(f, height=300)
+        self._comp_text.pack(fill="both", expand=True, padx=20, pady=(0,20))
+
+    def _update_compliance_ui(self):
+        """Refresh compliance cards and detail text from latest scan."""
+        for fw,(score_lbl,status_lbl) in self._comp_cards.items():
+            res = self.db.calc_compliance(self.vulnerabilities, fw)
+            color = (self.C["success"] if res["score"]>=80
+                     else self.C["medium"] if res["score"]>=60 else self.C["critical"])
+            score_lbl.configure(text=f"{res['score']}%", text_color=color)
+            status_lbl.configure(text=f"{res['passed']}/{res['total']} controls passed")
+        # detail text
+        lines = []
+        for cat, controls_map in COMPLIANCE.items():
+            lines.append(f"\n{'─'*50}")
+            lines.append(f"  {cat}")
+            lines.append(f"{'─'*50}")
+            for category, controls in controls_map.items():
+                failed = any(v.get("category")==category for v in self.vulnerabilities)
+                mark = "❌ FAIL" if failed else "✅ PASS"
+                lines.append(f"  {mark}  {category:35s} {', '.join(controls)}")
+        self._comp_text.configure(state="normal")
+        self._comp_text.delete("1.0","end")
+        self._comp_text.insert("1.0","\n".join(lines))
+        self._comp_text.configure(state="disabled")
+
+    def _setup_history_tab(self):
+        tab = self.tabs.tab("📈 History")
+        f   = ctk.CTkFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        f.pack(fill="both", expand=True, padx=20, pady=20)
+        ctk.CTkLabel(f, text="Scan History", font=("Segoe UI",15,"bold"),
+                     text_color=self.C["text_primary"]).pack(anchor="w", padx=20, pady=(20,10))
+        self._hist_txt = self._textbox(f)
+        self._hist_txt.pack(fill="both", expand=True, padx=20, pady=(0,20))
+        self._refresh_history()
+
+    def _refresh_history(self):
+        rows = self.db.history()
+        self._hist_txt.configure(state="normal")
+        self._hist_txt.delete("1.0","end")
+        if not rows:
+            self._hist_txt.insert("1.0","No scan history yet. Run a scan to begin tracking.")
+        else:
+            header = f"{'Timestamp':<22} {'Host':<20} {'Risk':>6} {'Total':>6} {'C':>4} {'H':>4} {'M':>4} {'L':>4}  Type\n"
+            self._hist_txt.insert("end", header + "─"*80+"\n")
+            for row in rows:
+                _, sid, ts, host, total, crit, high, med, low, risk, dur, stype = row
+                self._hist_txt.insert("end",
+                    f"{ts[:19]:<22} {host:<20} {risk:>5.1f}% {total:>6} {crit:>4} {high:>4} {med:>4} {low:>4}  {stype}\n")
+        self._hist_txt.configure(state="disabled")
+
+    def _setup_executive_tab(self):
+        tab = self.tabs.tab("💼 Executive")
+        self._exec_frame = ctk.CTkFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        self._exec_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        ctk.CTkLabel(self._exec_frame, text="Executive Dashboard",
+                     font=("Segoe UI",16,"bold"), text_color=self.C["text_primary"]
+                     ).pack(anchor="w", padx=20, pady=(20,10))
+        self._exec_txt = self._textbox(self._exec_frame, font=("Segoe UI",11))
+        self._exec_txt.pack(fill="both", expand=True, padx=20, pady=(0,20))
+        self._exec_txt.insert("1.0","Run a scan to populate this dashboard.")
+        self._exec_txt.configure(state="disabled")
+
+    def _update_executive_ui(self):
+        pct, level = self.scanner.risk_score()
+        stats = {s:sum(1 for v in self.vulnerabilities if v["severity"]==s)
+                 for s in ["critical","high","medium","low"]}
+        crit_list = [v for v in self.vulnerabilities if v["severity"]=="critical"]
+        top5 = "\n".join(f"  {i+1}. [{cvss_for(v):.1f}] {v['title']}"
+                         for i,v in enumerate(crit_list[:5]))
+        comp_lines = ""
+        for fw in ["CIS","NIST","ISO 27001","PCI-DSS"]:
+            r = self.db.calc_compliance(self.vulnerabilities, fw)
+            bar = "█"*int(r["score"]//10)+"░"*(10-int(r["score"]//10))
+            comp_lines += f"  {fw:<12} [{bar}] {r['score']:>5.1f}%  ({r['passed']}/{r['total']} passed)\n"
+        text = f"""{'='*60}
+  RAVEN-X ENTERPRISE — EXECUTIVE SUMMARY
+{'='*60}
+  System  : {self.scanner.system_info.get('hostname','N/A')}
+  Scan ID : {self.scanner.scan_id}
+  Time    : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+  Risk    : {pct}%  ({level})
+
+{'─'*60}
+  VULNERABILITY COUNTS
+{'─'*60}
+  🔴 Critical  : {stats['critical']:>4}
+  🟠 High      : {stats['high']:>4}
+  🟡 Medium    : {stats['medium']:>4}
+  ⚪ Low       : {stats['low']:>4}
+  ─────────────────────
+  Total        : {len(self.vulnerabilities):>4}
+
+{'─'*60}
+  TOP {min(5,len(crit_list))} CRITICAL RISKS (CVSS Score)
+{'─'*60}
+{top5 if top5 else '  None — great job!'}
+
+{'─'*60}
+  COMPLIANCE STATUS
+{'─'*60}
+{comp_lines}
+{'─'*60}
+  RECOMMENDED ACTIONS
+{'─'*60}
+  1. Address all CRITICAL issues within 24 hours
+  2. Fix HIGH severity issues within 7 days
+  3. Use 'Generate Script' for automated remediation
+  4. Re-scan after applying fixes
+  5. Schedule weekly automated scans
+{'='*60}
 """
+        self._exec_txt.configure(state="normal")
+        self._exec_txt.delete("1.0","end")
+        self._exec_txt.insert("1.0",text)
+        self._exec_txt.configure(state="disabled")
 
-            self.system_text.configure(state="normal")
-            self.system_text.delete("1.0", "end")
-            self.system_text.insert("1.0", system_info)
-            self.system_text.configure(state="disabled")
+    def _setup_settings_tab(self):
+        tab = self.tabs.tab("⚙️ Settings")
+        sf  = ctk.CTkScrollableFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        sf.pack(fill="both", expand=True, padx=20, pady=20)
+        ctk.CTkLabel(sf, text="Settings", font=("Segoe UI",15,"bold"),
+                     text_color=self.C["text_primary"]).grid(row=0,column=0,sticky="w",pady=(10,20),columnspan=3)
 
-        except Exception as e:
-            self.system_text.configure(state="normal")
-            self.system_text.delete("1.0", "end")
-            self.system_text.insert("1.0", f"Error gathering system info: {str(e)}")
-            self.system_text.configure(state="disabled")
+        fields = [
+            ("SMTP Server:",   "smtp_server",  ""),
+            ("SMTP Port:",     "smtp_port",    ""),
+            ("Email Address:", "smtp_user",    ""),
+            ("Email Password:","smtp_pass",    "*"),
+            ("Recipients (comma-sep):","email_recipients",""),
+        ]
+        self._sett_entries = {}
+        for r,(lbl,key,show) in enumerate(fields,1):
+            ctk.CTkLabel(sf, text=lbl, font=("Segoe UI",12)).grid(row=r,column=0,sticky="w",padx=10,pady=8)
+            e = ctk.CTkEntry(sf, width=340, height=35, show=show)
+            e.insert(0, str(self.config.get(key,"")))
+            e.grid(row=r,column=1,padx=10,pady=8,sticky="w")
+            self._sett_entries[key] = e
 
-    def update_progress(self, current, total, message):
-        """Update progress bar and label"""
-        self.progress_bar.set(current / total if total > 0 else 0)
-        self.progress_label.configure(text=f"{message} ({current}/{total})")
+        # restore toggle
+        self._restore_var = ctk.BooleanVar(value=self.config.get("auto_create_restore",True))
+        ctk.CTkSwitch(sf, text="Create restore point before fixes",
+                      variable=self._restore_var, fg_color=self.C["success"]
+                      ).grid(row=len(fields)+1,column=0,sticky="w",padx=10,pady=10,columnspan=2)
+
+        # export format
+        ctk.CTkLabel(sf, text="Export Format:", font=("Segoe UI",12)
+                     ).grid(row=len(fields)+2,column=0,sticky="w",padx=10,pady=8)
+        self._fmt_var = ctk.StringVar(value=self.config.get("export_format","html").upper())
+        ctk.CTkOptionMenu(sf, variable=self._fmt_var, values=["HTML","JSON","CSV"],
+                          width=140).grid(row=len(fields)+2,column=1,padx=10,pady=8,sticky="w")
+
+        ctk.CTkButton(sf, text="💾  Save Settings", command=self._save_settings,
+                      height=44, font=("Segoe UI",12,"bold"),
+                      fg_color=self.C["success"], corner_radius=8
+                      ).grid(row=len(fields)+3,column=0,pady=20,columnspan=2,sticky="w",padx=10)
+
+    def _save_settings(self):
+        for key,entry in self._sett_entries.items():
+            self.config[key] = entry.get()
+        self.config["auto_create_restore"] = self._restore_var.get()
+        self.config["export_format"] = self._fmt_var.get().lower()
+        self.email_mgr = EmailManager(self.config)
+        self._save_config()
+        messagebox.showinfo("Settings","Settings saved successfully!", parent=self.root)
+
+    def _setup_system_tab(self):
+        tab = self.tabs.tab("💻 System")
+        f   = ctk.CTkFrame(tab, fg_color=self.C["bg_secondary"], corner_radius=10)
+        f.pack(fill="both", expand=True, padx=20, pady=20)
+        hdr = ctk.CTkFrame(f, fg_color="transparent")
+        hdr.pack(fill="x", padx=20, pady=(20,10))
+        ctk.CTkLabel(hdr, text="System Information", font=("Segoe UI",15,"bold"),
+                     text_color=self.C["text_primary"]).pack(side="left")
+        ctk.CTkButton(hdr, text="🔄 Refresh", command=self._refresh_system,
+                      width=100, height=32).pack(side="right")
+        self._sys_txt = self._textbox(f)
+        self._sys_txt.pack(fill="both", expand=True, padx=20, pady=(0,20))
+        self._refresh_system()
+
+    def _refresh_system(self):
+        try:
+            mem  = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            info = f"""
+  OS          : {platform.platform()}
+  Architecture: {platform.architecture()[0]}
+  Hostname    : {socket.gethostname()}
+  Processor   : {platform.processor()[:60]}
+
+  CPU Cores   : {psutil.cpu_count(logical=True)} logical
+  CPU Usage   : {psutil.cpu_percent(interval=0.5)}%
+  RAM Total   : {mem.total//(1024**3)} GB
+  RAM Used    : {mem.used//(1024**3)} GB  ({mem.percent}%)
+  Disk Total  : {disk.total//(1024**3)} GB
+  Disk Used   : {disk.used//(1024**3)} GB  ({disk.percent}%)
+
+  Python      : {platform.python_version()}
+  Admin       : {'Yes ✅' if is_admin() else 'No ⚠️'}
+  Scan ID     : {self.scanner.scan_id}
+  RAVEN-X     : Enterprise v4.0
+"""
+        except Exception as e: info = f"Error: {e}"
+        self._sys_txt.configure(state="normal")
+        self._sys_txt.delete("1.0","end")
+        self._sys_txt.insert("1.0",info)
+        self._sys_txt.configure(state="disabled")
+
+    # ── scan flow ────────────────────────────────────────────────────────────
+    def _update_progress(self, current, total, msg):
+        self._prog_bar.set(current/total if total else 0)
+        self._prog_lbl.configure(text=f"{msg} ({current}/{total})")
         self.root.update()
 
     def start_scan(self):
-        """Start comprehensive security scan"""
-        if self.is_scanning:
-            return
-
-        self.is_scanning = True
-        self.scan_button.configure(state="disabled", text="Scanning...")
-        self.quick_scan_button.configure(state="disabled")
-        self.status_label.configure(text="Starting comprehensive security scan...")
-
-        self.results_text.configure(state="normal")
-        self.results_text.delete("1.0", "end")
-        self.results_text.insert("1.0", "🚀 Starting comprehensive security scan...\n" + "="*60 + "\n\n")
-        self.results_text.configure(state="disabled")
-
-        def scan_thread():
+        if self.is_scanning: return
+        self._begin_scan("full")
+        def run():
             try:
-                self.vulnerabilities = self.scanner.scan_all(progress_callback=self.update_progress)
-                self.root.after(0, self.display_results)
+                self.vulnerabilities = self.scanner.scan_all(self._update_progress)
+                self.root.after(0, self._show_results)
             except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Scan error: {error_msg}")
-                self.root.after(0, lambda msg=error_msg: self.show_error(f"Scan failed: {msg}"))
-            finally:
-                self.root.after(0, lambda: self.scan_button.configure(state="normal", text="🔍 Start Security Scan"))
-                self.root.after(0, lambda: self.quick_scan_button.configure(state="normal"))
-                self.root.after(0, lambda: setattr(self, 'is_scanning', False))
-                self.root.after(0, lambda: self.progress_bar.set(0))
-                self.root.after(0, lambda: self.progress_label.configure(text=""))
-
-        threading.Thread(target=scan_thread, daemon=True).start()
+                self.root.after(0, lambda: messagebox.showerror("Scan Error", str(e)))
+            finally: self.root.after(0, self._end_scan)
+        threading.Thread(target=run, daemon=True).start()
 
     def start_quick_scan(self):
-        """Start quick scan (basic checks only)"""
-        if self.is_scanning:
-            return
-
-        self.is_scanning = True
-        self.scan_button.configure(state="disabled")
-        self.quick_scan_button.configure(state="disabled", text="Quick Scanning...")
-        self.status_label.configure(text="Starting quick scan...")
-
-        self.results_text.configure(state="normal")
-        self.results_text.delete("1.0", "end")
-        self.results_text.insert("1.0", "⚡ Starting quick security scan...\n" + "="*60 + "\n\n")
-        self.results_text.configure(state="disabled")
-
-        def quick_scan_thread():
+        if self.is_scanning: return
+        self._begin_scan("quick")
+        def run():
             try:
-                # Run only critical checks
                 self.scanner.vulnerabilities = []
-                self.scanner.check_windows_updates()
-                self.scanner.check_firewall()
-                self.scanner.check_antivirus()
-                self.scanner.check_open_ports()
+                for fn in [self.scanner.check_windows_updates,
+                           self.scanner.check_firewall,
+                           self.scanner.check_antivirus,
+                           self.scanner.check_defender_exclusions,
+                           self.scanner.check_open_ports,
+                           self.scanner.check_smb_protocol,
+                           self.scanner.check_powershell_execution_policy]:
+                    fn()
                 self.vulnerabilities = self.scanner.vulnerabilities
-
-                self.root.after(0, self.display_results)
+                self.root.after(0, self._show_results)
             except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Quick scan error: {error_msg}")
-                self.root.after(0, lambda msg=error_msg: self.show_error(f"Quick scan failed: {msg}"))
-            finally:
-                self.root.after(0, lambda: self.scan_button.configure(state="normal"))
-                self.root.after(0, lambda: self.quick_scan_button.configure(state="normal", text="⚡ Quick Scan"))
-                self.root.after(0, lambda: setattr(self, 'is_scanning', False))
+                self.root.after(0, lambda: messagebox.showerror("Quick Scan Error",str(e)))
+            finally: self.root.after(0, self._end_scan)
+        threading.Thread(target=run, daemon=True).start()
 
-        threading.Thread(target=quick_scan_thread, daemon=True).start()
+    def _begin_scan(self, kind):
+        self.is_scanning = True
+        label = "🔍 Scanning…" if kind=="full" else "⚡ Quick Scanning…"
+        self._btns["ai"].configure(state="disabled")
+        self._btns["fix"].configure(state="disabled")
+        self._btns["export"].configure(state="disabled")
+        self._btns["script"].configure(state="disabled")
+        self._btns["copy"].configure(state="disabled")
+        self._status_lbl.configure(text=f"Running {kind} scan…")
+        self._res_txt.configure(state="normal")
+        self._res_txt.delete("1.0","end")
+        self._res_txt.insert("1.0",f"🚀 Starting {kind} scan…\n{'='*60}\n\n")
+        self._res_txt.configure(state="disabled")
 
-    def display_results(self):
-        """Display scan results with enhanced formatting"""
-        self.results_text.configure(state="normal")
-        self.results_text.delete("1.0", "end")
+    def _end_scan(self):
+        self.is_scanning = False
+        self._prog_bar.set(0); self._prog_lbl.configure(text="")
 
-        if not self.vulnerabilities:
-            success_msg = """✅ SCAN COMPLETE - NO VULNERABILITIES DETECTED
+    def _show_results(self):
+        vulns = self.vulnerabilities
+        sev_order = {"critical":0,"high":1,"medium":2,"low":3}
+        sorted_v  = sorted(vulns, key=lambda v: sev_order.get(v["severity"],4))
+        stats = {s:sum(1 for v in vulns if v["severity"]==s)
+                 for s in ["critical","high","medium","low"]}
+        pct, level = self.scanner.risk_score()
 
-╔══════════════════════════════════════════════════════════════╗
-║                    SECURE SYSTEM STATUS                      ║
-╚══════════════════════════════════════════════════════════════╝
+        # update sidebar
+        for sev,lbl in self._stats.items():
+            sym = {"critical":"🔴","high":"🟠","medium":"🟡","low":"⚪"}[sev]
+            lbl.configure(text=f"{sym} {sev.capitalize()}: {stats[sev]}")
+        self._total_lbl.configure(text=f"Total Issues: {len(vulns)}")
+        self._risk_lbl.configure(text=f"Risk: {pct}%")
+        self._status_lbl.configure(text=f"Scan complete – {len(vulns)} issues | Risk {pct}% ({level})")
 
-Congratulations! Your system appears to be properly configured 
-with no security issues found in the scanned categories.
+        # build result text
+        sev_sym = {"critical":"🔴 CRITICAL","high":"🟠 HIGH","medium":"🟡 MEDIUM","low":"⚪ LOW"}
+        lines = [f"SECURITY SCAN COMPLETE — {len(vulns)} ISSUES FOUND",
+                 f"Risk Score: {pct}% ({level})  |  Scan ID: {self.scanner.scan_id}",
+                 f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                 "","─"*60]
+        for i,v in enumerate(sorted_v,1):
+            lines += [f"\n{i}. {sev_sym.get(v['severity'],'UNKNOWN')} — {v['title']}",
+                      f"   Category : {v['category']}",
+                      f"   Component: {v['component']}",
+                      f"   Details  : {v['details']}",
+                      f"   Fix      : {v.get('remediation','')}",
+                      "   "+"-"*50]
+        lines += ["","─"*60,"NEXT STEPS:",
+                  "  1. Review critical issues first",
+                  "  2. Click 'Generate Script' for automated PowerShell fixes",
+                  "  3. Use 'AI Analysis' for detailed guidance",
+                  "  4. Export report for compliance/documentation"]
+        if self.config["safe_mode"]:
+            lines.append("\n⚠️  SAFE MODE: No changes will be made automatically")
 
-🔹 RECOMMENDATIONS FOR MAINTAINING SECURITY:
+        self._res_txt.configure(state="normal")
+        self._res_txt.delete("1.0","end")
+        self._res_txt.insert("1.0","\n".join(lines))
+        self._res_txt.configure(state="disabled")
 
-1. Keep Windows Update enabled and check regularly
-2. Maintain regular security scans (weekly recommended)
-3. Keep antivirus definitions up to date
-4. Review security logs periodically
-5. Use strong, unique passwords
-6. Enable BitLocker for disk encryption
-7. Regular system backups
+        # enable buttons
+        for b in self._btns.values(): b.configure(state="normal")
 
-⚠️  Note: This scan covers common security configurations but
-does not guarantee complete security. Regular updates and 
-vigilance are essential.
+        # update other tabs
+        self._update_compliance_ui()
+        self._update_executive_ui()
+        self._refresh_history()
 
-"""
-            self.results_text.insert("1.0", success_msg)
-            self.results_text.configure(state="disabled")
+        # save to DB
+        end = self.scanner.scan_end_time or datetime.now()
+        dur = (end - self.scanner.scan_start_time).total_seconds() if self.scanner.scan_start_time else 0
+        self.db.save({
+            "scan_id": self.scanner.scan_id,
+            "ts": datetime.now().isoformat(),
+            "host": socket.gethostname(),
+            "total": len(vulns), "critical": stats["critical"],
+            "high": stats["high"], "medium": stats["medium"],
+            "low": stats["low"], "risk_score": pct,
+            "duration": dur, "vulns": vulns
+        })
 
-            self.scan_button.configure(state="normal", text="🔍 Start Security Scan")
-            self.quick_scan_button.configure(state="normal")
-            self.status_label.configure(text="Scan complete - System secure")
+        # email alert for criticals
+        if (self.config.get("alert_on_critical") and stats["critical"] > 0
+                and self.config.get("smtp_user") and self.config.get("email_recipients")):
+            recs = [r.strip() for r in self.config["email_recipients"].split(",") if r.strip()]
+            crit = [v for v in vulns if v["severity"]=="critical"]
+            threading.Thread(
+                target=self.email_mgr.send_alert,
+                args=({"host":socket.gethostname(),"risk_score":pct,"scan_id":self.scanner.scan_id},
+                      crit, recs),
+                daemon=True
+            ).start()
 
-            # Update stats
-            self.stats_critical.configure(text="🔴 Critical: 0")
-            self.stats_high.configure(text="🟠 High: 0")
-            self.stats_medium.configure(text="🟡 Medium: 0")
-            self.stats_low.configure(text="⚪ Low: 0")
-            self.stats_total.configure(text="Total Issues: 0")
-            self.risk_score_label.configure(text="Risk: 0%")
-
-            return
-
-        # Sort vulnerabilities by severity
-        severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-        sorted_vulns = sorted(self.vulnerabilities,
-                            key=lambda x: severity_order.get(x['severity'], 4))
-
-        # Update stats
-        stats = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
-        for v in self.vulnerabilities:
-            severity = v['severity']
-            if severity in stats:
-                stats[severity] += 1
-
-        total_vulns = len(self.vulnerabilities)
-
-        self.stats_critical.configure(text=f"🔴 Critical: {stats['critical']}")
-        self.stats_high.configure(text=f"🟠 High: {stats['high']}")
-        self.stats_medium.configure(text=f"🟡 Medium: {stats['medium']}")
-        self.stats_low.configure(text=f"⚪ Low: {stats['low']}")
-        self.stats_total.configure(text=f"Total Issues: {total_vulns}")
-
-        # Calculate and display risk score
-        risk_score, risk_level = self.scanner.calculate_risk_score()
-        self.risk_score_label.configure(text=f"Risk: {risk_score}%")
-
-        # Build results text with enhanced formatting
-        result_text = f"""🔍 SECURITY SCAN COMPLETE - {total_vulns} ISSUES FOUND
-
-╔══════════════════════════════════════════════════════════════╗
-║                      SCAN SUMMARY                            ║
-╚══════════════════════════════════════════════════════════════╝
-
-Overall Risk Score: {risk_score}% - {risk_level}
-Scan ID: {self.scanner.scan_id}
-Scan Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-Severity Breakdown:
-🔴 Critical: {stats['critical']} issue(s)
-🟠 High: {stats['high']} issue(s)
-🟡 Medium: {stats['medium']} issue(s)
-⚪ Low: {stats['low']} issue(s)
-
-════════════════════════════════════════════════════════════════
-                    DETAILED FINDINGS
-════════════════════════════════════════════════════════════════
-
-"""
-
-        severity_symbols = {
-            'critical': '🔴 CRITICAL',
-            'high': '🟠 HIGH',
-            'medium': '🟡 MEDIUM',
-            'low': '⚪ LOW'
-        }
-
-        severity_colors = {
-            'critical': '#e74c3c',
-            'high': '#e67e22',
-            'medium': '#f39c12',
-            'low': '#95a5a6'
-        }
-
-        for i, vuln in enumerate(sorted_vulns, 1):
-            symbol = severity_symbols.get(vuln['severity'], '⚪ UNKNOWN')
-            color = severity_colors.get(vuln['severity'], '#000000')
-
-            # Format each vulnerability with clear sections
-            result_text += f"\n{'━' * 60}\n"
-            result_text += f"{i}. {symbol} - {vuln['title']}\n"
-            result_text += f"{'─' * 40}\n"
-            result_text += f"   📂 Category: {vuln['category']}\n"
-            result_text += f"   ⚙️  Component: {vuln['component']}\n"
-            result_text += f"\n   📝 Details:\n   {vuln['details']}\n"
-
-            if 'remediation' in vuln and vuln['remediation']:
-                result_text += f"\n   🔧 Remediation:\n   {vuln['remediation']}\n"
-
-            result_text += f"\n   {'─' * 40}\n"
-
-        result_text += f"\n{'━' * 60}\n\n"
-        result_text += "💡 RECOMMENDED ACTIONS:\n\n"
-        result_text += "1. Review all critical and high severity issues first\n"
-        result_text += "2. Use 'AI Analysis' for prioritized remediation steps\n"
-        result_text += "3. Consider using 'Fix Issues' for automated remediation\n"
-        result_text += "4. Export report for documentation and compliance\n"
-        result_text += "5. Schedule regular scans to monitor security posture\n"
-
-        if self.config['safe_mode']:
-            result_text += "\n⚠️  SAFE MODE ENABLED: No automatic fixes will be applied\n"
-
-        self.results_text.insert("1.0", result_text)
-        self.results_text.configure(state="disabled")
-
-        # Enable action buttons
-        self.scan_button.configure(state="normal", text="🔍 Start Security Scan")
-        self.quick_scan_button.configure(state="normal")
-        self.status_label.configure(text=f"Scan complete - {total_vulns} issues detected - Risk: {risk_score}%")
-
-        self.ai_button.configure(state="normal")
-        self.fix_button.configure(state="normal")
-        self.export_button.configure(state="normal")
-
-    def filter_results(self, severity):
-        """Filter results by severity"""
-        if not self.vulnerabilities:
-            return
-
-        self.results_text.configure(state="normal")
-        self.results_text.delete("1.0", "end")
-
-        if severity == 'all':
-            self.display_results()
-            return
-
-        filtered = [v for v in self.vulnerabilities if v['severity'] == severity]
-
+    def _filter(self, sev):
+        if not self.vulnerabilities: return
+        if sev == "all": self._show_results(); return
+        filtered = [v for v in self.vulnerabilities if v["severity"]==sev]
+        self._res_txt.configure(state="normal")
+        self._res_txt.delete("1.0","end")
         if not filtered:
-            self.results_text.insert("1.0", f"No {severity} severity issues found.")
-            self.results_text.configure(state="disabled")
-            return
+            self._res_txt.insert("1.0",f"No {sev} severity issues found.")
+        else:
+            lines=[f"{sev.upper()} ISSUES ({len(filtered)} found)\n","─"*60]
+            for i,v in enumerate(filtered,1):
+                lines+=[f"\n{i}. {v['title']}",
+                        f"   Category : {v['category']}",
+                        f"   Details  : {v['details']}",
+                        f"   Fix      : {v.get('remediation','')}",
+                        "   "+"-"*40]
+            self._res_txt.insert("1.0","\n".join(lines))
+        self._res_txt.configure(state="disabled")
 
-        result_text = f"🔍 {severity.upper()} SEVERITY ISSUES ({len(filtered)} found)\n\n"
-
-        for i, vuln in enumerate(filtered, 1):
-            result_text += f"{i}. {vuln['title']}\n"
-            result_text += f"   Category: {vuln['category']}\n"
-            result_text += f"   Component: {vuln['component']}\n"
-            result_text += f"   Details: {vuln['details']}\n"
-            result_text += f"   Remediation: {vuln.get('remediation', 'N/A')}\n"
-            result_text += "-" * 60 + "\n\n"
-
-        self.results_text.insert("1.0", result_text)
-        self.results_text.configure(state="disabled")
-
-    def create_system_restore_point(self):
-        """Create a system restore point before making changes"""
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            # Check if we have admin privileges
-            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
-            if not is_admin:
-                logger.warning("Admin privileges required for restore point creation")
-                return False
-
-            # Create restore point using PowerShell
-            ps_script = '''
-$ErrorActionPreference = "Stop"
-try {
-    $restorePointName = "RAVEN-X Security Fixes - " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    Checkpoint-Computer -Description $restorePointName -RestorePointType "MODIFY_SETTINGS"
-    Write-Output "[SUCCESS] Restore point created: $restorePointName"
-    return $true
-} catch {
-    Write-Output "[ERROR] Failed to create restore point: $($_.Exception.Message)"
-    return $false
-}
-'''
-
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.ps1', delete=False) as f:
-                script_path = f.name
-                f.write(ps_script)
-
-            cmd = f'powershell -ExecutionPolicy Bypass -File "{script_path}"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=30)
-
-            os.unlink(script_path)
-
-            if '[SUCCESS]' in result.stdout:
-                logger.info("System restore point created successfully")
-                return True
-            else:
-                logger.error(f"Failed to create restore point: {result.stdout}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error creating restore point: {e}")
-            return False
-
-    def fix_vulnerabilities(self):
-        """Fix vulnerabilities with enhanced safety features"""
+    # ── actions ─────────────────────────────────────────────────────────────
+    def generate_remediation_script(self):
+        """
+        Generate a clean, working PowerShell remediation script.
+        Each fix is wrapped in its own try/catch and written as LIVE code
+        (not commented out) so the script is immediately executable.
+        A -WhatIf / -DryRun switch lets users preview before applying.
+        """
         if not self.vulnerabilities:
-            self.show_info("No vulnerabilities to fix.")
+            messagebox.showinfo("Nothing to fix", "Run a scan first.", parent=self.root)
             return
 
-        # Check if in safe mode
-        if self.config['safe_mode']:
-            response = messagebox.askyesno(
-                "Safe Mode Enabled",
-                "Safe Mode is currently enabled. This means you can review findings "
-                "but fixes won't be applied automatically.\n\n"
-                "Would you like to disable Safe Mode and proceed with fixes?",
-                parent=self.root
-            )
-            if not response:
-                return
-            self.config['safe_mode'] = False
-            self.safe_mode_switch.deselect()
+        order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        sorted_v = sorted(self.vulnerabilities, key=lambda v: order.get(v["severity"], 4))
 
-        # Ask for confirmation
-        confirm_msg = f"""⚠️  CONFIRM AUTOMATED FIXES
+        # ── Only include vulns that have a real PS command ────────────────
+        fixable   = [v for v in sorted_v
+                     if v.get("powershell_command", "").strip()
+                     and not v["powershell_command"].strip().startswith("#")]
+        no_fix    = [v for v in sorted_v
+                     if not v.get("powershell_command", "").strip()
+                     or v["powershell_command"].strip().startswith("#")]
 
-This will attempt to fix {len(self.vulnerabilities)} security issues.
+        host    = socket.gethostname()
+        scan_id = self.scanner.scan_id
+        ts      = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-IMPORTANT:
-• Some fixes require administrator privileges
-• System restart may be required for some changes
-• A system restore point will be created (if enabled)
-• Review each change carefully before proceeding
+        lines = [
+            "#Requires -RunAsAdministrator",
+            "<#",
+            ".SYNOPSIS",
+            "    RAVEN-X Enterprise — Automated Remediation Script",
+            ".DESCRIPTION",
+            f"    Generated : {ts}",
+            f"    Scan ID   : {scan_id}",
+            f"    Host      : {host}",
+            f"    Fixable   : {len(fixable)} issue(s)",
+            f"    Manual    : {len(no_fix)} issue(s) require manual action",
+            "",
+            "    Run with  -DryRun to preview changes without applying them.",
+            "    Run without flags to apply all fixes.",
+            ".EXAMPLE",
+            "    .\\RAVENX_Remediation.ps1 -DryRun",
+            "    .\\RAVENX_Remediation.ps1",
+            "#>",
+            "",
+            "param(",
+            "    [switch]$DryRun",
+            ")",
+            "",
+            "# ── Initialise ────────────────────────────────────────────────────",
+            "$ErrorActionPreference = 'Stop'",
+            "$Results   = [System.Collections.Generic.List[PSObject]]::new()",
+            "$StartTime = Get-Date",
+            "",
+            'if ($DryRun) { Write-Host "[DRY RUN MODE — no changes will be made]" -ForegroundColor Yellow }',
+            "",
+            "# ── Helper function ───────────────────────────────────────────────",
+            "function Invoke-Fix {",
+            "    param([string]$Title, [string]$Severity, [string]$Category, [scriptblock]$Action)",
+            "    $status  = 'Skipped'",
+            "    $message = ''",
+            "    try {",
+            "        if (-not $DryRun) {",
+            "            & $Action",
+            "            $status = 'Fixed'",
+            '            Write-Host "  [OK] $Title" -ForegroundColor Green',
+            "        } else {",
+            "            $status  = 'DryRun'",
+            '            Write-Host "  [DR] $Title" -ForegroundColor Cyan',
+            "        }",
+            "    } catch {",
+            "        $status  = 'Failed'",
+            "        $message = $_.Exception.Message",
+            '        Write-Host "  [!!] $Title — $message" -ForegroundColor Red',
+            "    }",
+            "    $Results.Add([PSCustomObject]@{",
+            "        Severity = $Severity",
+            "        Category = $Category",
+            "        Fix      = $Title",
+            "        Status   = $status",
+            "        Message  = $message",
+            "    })",
+            "}",
+            "",
+        ]
 
-Do you want to proceed with the automated fixes?"""
+        # ── Fixable blocks grouped by severity ────────────────────────────
+        current_sev = None
+        for v in fixable:
+            sev = v["severity"]
+            if sev != current_sev:
+                current_sev = sev
+                lines += [
+                    "",
+                    f"# {'=' * 60}",
+                    f"# {sev.upper()} SEVERITY",
+                    f"# {'=' * 60}",
+                ]
 
-        response = messagebox.askyesno(
-            "Confirm Auto-Fix",
-            confirm_msg,
-            parent=self.root
+            title    = v.get("title", "Unknown").replace("'", "''").replace('"', '`"')
+            category = v.get("category", "").replace("'", "''")
+            detail   = v.get("details", "").replace("'", "''")
+            rem      = v.get("remediation", "").replace("'", "''")
+            cmd      = v["powershell_command"].strip()
+
+            lines.append("")
+            lines.append(f"# {v.get('title','')} — {v.get('category','')}")
+            lines.append(f"# Details : {v.get('details','')}")
+            lines.append(f"# Fix     : {v.get('remediation','')}")
+
+            # Build the scriptblock — indent each cmd line
+            cmd_lines = [f"        {cl.strip()}" for cl in cmd.splitlines() if cl.strip()]
+            sb_body   = "\n".join(cmd_lines)
+
+            lines.append(f"Invoke-Fix -Title '{title}' -Severity '{sev}' -Category '{category}' -Action {{")
+            lines.append(sb_body)
+            lines.append("}")
+
+        # ── Manual-only section ───────────────────────────────────────────
+        if no_fix:
+            lines += [
+                "",
+                "",
+                f"# {'=' * 60}",
+                "# MANUAL ACTION REQUIRED (no automated fix available)",
+                f"# {'=' * 60}",
+            ]
+            for v in no_fix:
+                lines.append(f"# [{v['severity'].upper()}] {v.get('title','')}")
+                lines.append(f"#   Category   : {v.get('category','')}")
+                lines.append(f"#   Details    : {v.get('details','')}")
+                lines.append(f"#   Action     : {v.get('remediation','')}")
+                lines.append("#")
+
+        # ── Summary report ────────────────────────────────────────────────
+        lines += [
+            "",
+            "",
+            "# ── Summary ──────────────────────────────────────────────────────",
+            "$Duration = (Get-Date) - $StartTime",
+            "Write-Host ''",
+            r'Write-Host "╔══════════════════════════════════════════════╗" -ForegroundColor Cyan',
+            r'Write-Host "║        RAVEN-X REMEDIATION SUMMARY           ║" -ForegroundColor Cyan',
+            r'Write-Host "╚══════════════════════════════════════════════╝" -ForegroundColor Cyan',
+            "",
+            "if ($Results.Count -gt 0) {",
+            "    $Results | Sort-Object Severity, Status | Format-Table Severity,Category,Fix,Status,Message -AutoSize -Wrap",
+            "    $fixed   = ($Results | Where-Object { $_.Status -eq 'Fixed'   }).Count",
+            "    $failed  = ($Results | Where-Object { $_.Status -eq 'Failed'  }).Count",
+            "    $dryrun  = ($Results | Where-Object { $_.Status -eq 'DryRun'  }).Count",
+            '    Write-Host "Fixed   : $fixed"   -ForegroundColor Green',
+            '    Write-Host "Failed  : $failed"  -ForegroundColor Red',
+            '    if ($dryrun -gt 0) { Write-Host "DryRun  : $dryrun" -ForegroundColor Cyan }',
+            "} else {",
+            '    Write-Host "No automated fixes were run." -ForegroundColor Yellow',
+            "}",
+            "",
+            f'Write-Host ""',
+            f'Write-Host "Manual action required for {len(no_fix)} issue(s) — see comments above."',
+            r'Write-Host "Duration: $($Duration.TotalSeconds.ToString(\"F1\"))s"',
+            r'Write-Host "Re-run RAVEN-X scan after applying fixes to verify."',
+        ]
+
+        # ── Save ──────────────────────────────────────────────────────────
+        fname = filedialog.asksaveasfilename(
+            parent=self.root,
+            defaultextension=".ps1",
+            filetypes=[("PowerShell Script", "*.ps1"), ("All Files", "*.*")],
+            initialfile=f"RAVENX_Remediation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ps1"
         )
-
-        if not response:
+        if not fname:
             return
 
-        # Create restore point if enabled
-        if self.config['auto_create_restore']:
-            self.status_label.configure(text="Creating system restore point...")
-            success = self.create_system_restore_point()
-            if not success:
-                response = messagebox.askyesno(
-                    "Restore Point Failed",
-                    "Failed to create system restore point. Continue anyway?",
-                    parent=self.root
-                )
-                if not response:
-                    return
-
-        # Proceed with fixes
-        self.execute_fixes()
-
-    def execute_fixes(self):
-        """Execute fixes with enhanced error handling and logging"""
-        self.fix_button.configure(state="disabled", text="Applying fixes...")
-        self.status_label.configure(text="Applying security fixes...")
-
-        def fix_thread():
-            fix_results = []
-            fix_results.append("🔧 RAVEN-X AUTOMATED FIXES")
-            fix_results.append("=" * 60)
-            fix_results.append(f"Fix started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            fix_results.append("")
-
-            # Check admin privileges
-            try:
-                import ctypes
-                is_admin = ctypes.windll.shell32.IsUserAnAdmin()
-                if not is_admin:
-                    fix_results.append("❌ ERROR: Administrator privileges required!")
-                    fix_results.append("   Please run the application as Administrator to apply fixes.")
-                    self.root.after(0, lambda: self.show_fix_results(fix_results))
-                    return
-            except:
-                fix_results.append("⚠️  Warning: Could not verify administrator privileges")
-
-            # Group fixes by category for better organization
-            fixes_by_category = defaultdict(list)
-            for vuln in self.vulnerabilities:
-                fixes_by_category[vuln['category']].append(vuln)
-
-            # Process fixes by category
-            for category, vulns in fixes_by_category.items():
-                fix_results.append(f"\n📂 {category.upper()} FIXES")
-                fix_results.append("-" * 40)
-
-                for vuln in vulns:
-                    result = self.apply_fix(vuln)
-                    fix_results.extend(result)
-
-            fix_results.append("\n" + "=" * 60)
-            fix_results.append("✅ FIX PROCESS COMPLETE")
-            fix_results.append("")
-
-            # Summary
-            critical_fixed = sum(1 for r in fix_results if '✓ Fixed' in r and 'CRITICAL' in r)
-            high_fixed = sum(1 for r in fix_results if '✓ Fixed' in r and 'HIGH' in r)
-            total_fixed = sum(1 for r in fix_results if '✓ Fixed' in r)
-            total_failed = sum(1 for r in fix_results if '✗ Failed' in r)
-
-            fix_results.append(f"SUMMARY:")
-            fix_results.append(f"  Total fixed: {total_fixed}")
-            fix_results.append(f"  Critical fixed: {critical_fixed}")
-            fix_results.append(f"  High fixed: {high_fixed}")
-            fix_results.append(f"  Failed: {total_failed}")
-            fix_results.append(f"  Manual actions required: {sum(1 for r in fix_results if '⚠ MANUAL' in r)}")
-
-            fix_results.append("\n📋 NEXT STEPS:")
-            fix_results.append("  1. Run a new scan to verify fixes")
-            fix_results.append("  2. Restart system if prompted")
-            fix_results.append("  3. Review any manual actions needed")
-            fix_results.append("  4. Check Windows Update for patches")
-            fix_results.append("  5. Monitor system stability")
-
-            self.root.after(0, lambda: self.show_fix_results(fix_results))
-
-        threading.Thread(target=fix_thread, daemon=True).start()
-
-    def apply_fix(self, vuln):
-        """Apply a single fix with comprehensive error handling"""
-        results = []
-        category = vuln['category']
-        title = vuln['title']
-        severity = vuln['severity'].upper()
-
+        script_content = "\n".join(lines)
         try:
-            if 'Firewall' in category:
-                results.append(f"🔧 Fixing firewall: {title}")
-                if 'DomainProfile' in title:
-                    cmd = 'netsh advfirewall set domainprofile state on'
-                elif 'PrivateProfile' in title:
-                    cmd = 'netsh advfirewall set privateprofile state on'
-                elif 'PublicProfile' in title:
-                    cmd = 'netsh advfirewall set publicprofile state on'
-                else:
-                    cmd = 'netsh advfirewall set allprofiles state on'
+            with open(fname, "w", encoding="utf-8") as f:
+                f.write(script_content)
 
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-                if result.returncode == 0:
-                    results.append(f"  ✓ {severity} FIXED: {title}")
-                else:
-                    results.append(f"  ✗ {severity} FAILED: {title}")
-                    results.append(f"    Error: {result.stderr[:100]}")
-
-            elif 'Windows Update' in category:
-                if 'Service' in title:
-                    results.append(f"🔧 Fixing Windows Update service")
-                    cmd = 'sc config wuauserv start=auto && sc start wuauserv'
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=15)
-                    if result.returncode == 0 or 'already running' in result.stdout.lower():
-                        results.append(f"  ✓ {severity} FIXED: {title}")
-                    else:
-                        results.append(f"  ✗ {severity} FAILED: {title}")
-
-                elif 'Outdated' in title:
-                    results.append(f"⚠ {severity} MANUAL: {title}")
-                    results.append("  Open Windows Update settings to install updates")
-                    subprocess.Popen('start ms-settings:windowsupdate', shell=True)
-
-            elif 'User Account Control' in category:
-                results.append(f"🔧 Fixing UAC settings")
-                try:
-                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                       r'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System',
-                                       0, winreg.KEY_SET_VALUE)
-                    winreg.SetValueEx(key, 'ConsentPromptBehaviorAdmin', 0, winreg.REG_DWORD, 2)
-                    winreg.SetValueEx(key, 'PromptOnSecureDesktop', 0, winreg.REG_DWORD, 1)
-                    winreg.CloseKey(key)
-                    results.append(f"  ✓ {severity} FIXED: {title} (restart required)")
-                except Exception as e:
-                    results.append(f"  ✗ {severity} FAILED: {title}")
-                    results.append(f"    Error: {str(e)}")
-
-            elif 'Remote Desktop' in category or 'RDP' in title:
-                results.append(f"🔧 Disabling Remote Desktop")
-                try:
-                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                       r'SYSTEM\CurrentControlSet\Control\Terminal Server',
-                                       0, winreg.KEY_SET_VALUE)
-                    winreg.SetValueEx(key, 'fDenyTSConnections', 0, winreg.REG_DWORD, 1)
-                    winreg.CloseKey(key)
-                    results.append(f"  ✓ {severity} FIXED: {title}")
-                except Exception as e:
-                    results.append(f"  ✗ {severity} FAILED: {title}")
-                    results.append(f"    Error: {str(e)}")
-
-            elif 'Network' in category:
-                if 'Risky Port' in title:
-                    port = vuln.get('port')
-                    if port:
-                        results.append(f"🔧 Blocking risky port {port}")
-                        cmd_block = f'netsh advfirewall firewall add rule name="RAVEN-X Block Port {port}" dir=in action=block protocol=TCP localport={port}'
-                        result = subprocess.run(cmd_block, capture_output=True, text=True, shell=True, timeout=10)
-                        if result.returncode == 0:
-                            results.append(f"  ✓ {severity} FIXED: Blocked port {port}")
-                        else:
-                            results.append(f"  ✗ {severity} FAILED: Port {port}")
-
-                elif 'Network Discovery' in title:
-                    cmd = 'netsh advfirewall firewall set rule group="Network Discovery" new enable=No'
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-                    if result.returncode == 0:
-                        results.append(f"  ✓ {severity} FIXED: {title}")
-                    else:
-                        results.append(f"  ✗ {severity} FAILED: {title}")
-
-                elif 'File and Printer Sharing' in title:
-                    cmd = 'netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=No'
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-                    if result.returncode == 0:
-                        results.append(f"  ✓ {severity} FIXED: {title}")
-                    else:
-                        results.append(f"  ✗ {severity} FAILED: {title}")
-
-            else:
-                results.append(f"⚠ {severity} MANUAL REQUIRED: {title}")
-                if 'remediation' in vuln:
-                    results.append(f"  Action: {vuln['remediation']}")
-
+            msg = (
+                f"Script saved to:\n{fname}\n\n"
+                f"• {len(fixable)} automated fix(es)\n"
+                f"• {len(no_fix)} manual action(s)\n\n"
+                f"Run with:  .\\{os.path.basename(fname)} -DryRun   (preview)\n"
+                f"Run with:  .\\{os.path.basename(fname)}           (apply)\n\n"
+                f"Open in Notepad to review?"
+            )
+            if messagebox.askyesno("Script Saved", msg, parent=self.root):
+                subprocess.Popen(["notepad.exe", fname])
         except Exception as e:
-            results.append(f"✗ {severity} ERROR: {title}")
-            results.append(f"  Exception: {str(e)}")
-
-        return results
-
-    def show_fix_results(self, results):
-        """Display fix results in a dialog"""
-        result_window = ctk.CTkToplevel(self.root)
-        result_window.title("Fix Results")
-        result_window.geometry("1000x700")
-
-        # Center the window
-        result_window.update_idletasks()
-        width = result_window.winfo_width()
-        height = result_window.winfo_height()
-        x = (result_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (result_window.winfo_screenheight() // 2) - (height // 2)
-        result_window.geometry(f'{width}x{height}+{x}+{y}')
-
-        # Header
-        header_frame = ctk.CTkFrame(result_window, fg_color=self.colors['bg_secondary'],
-                                   corner_radius=0, height=80)
-        header_frame.pack(fill="x", padx=0, pady=0)
-        header_frame.pack_propagate(False)
-
-        header_content = ctk.CTkFrame(header_frame, fg_color="transparent")
-        header_content.pack(fill="both", expand=True, padx=25, pady=15)
-
-        header_title = ctk.CTkLabel(header_content, text="Remediation Results",
-                                   font=("Segoe UI", 20, "bold"),
-                                   text_color=self.colors['text_primary'])
-        header_title.pack(anchor="w")
-
-        subtitle = ctk.CTkLabel(header_content, text="Review the changes made to your system",
-                               font=("Segoe UI", 11),
-                               text_color=self.colors['text_secondary'])
-        subtitle.pack(anchor="w", pady=(5, 0))
-
-        # Results text
-        text_frame = ctk.CTkFrame(result_window, fg_color=self.colors['bg_primary'])
-        text_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        result_text = ctk.CTkTextbox(text_frame,
-                                    font=("Consolas", 11),
-                                    fg_color=self.colors['bg_secondary'],
-                                    text_color=self.colors['text_primary'],
-                                    border_width=1,
-                                    border_color=self.colors['border'],
-                                    corner_radius=8)
-        result_text.pack(fill="both", expand=True)
-
-        result_summary = "\n".join(results)
-        result_text.insert("1.0", result_summary)
-        result_text.configure(state="disabled")
-
-        # Buttons
-        btn_frame = ctk.CTkFrame(result_window, fg_color=self.colors['bg_primary'])
-        btn_frame.pack(pady=20)
-
-        rescan_btn = ctk.CTkButton(btn_frame, text="🔄 Run New Scan",
-                                  command=lambda: [result_window.destroy(), self.start_scan()],
-                                  fg_color=self.colors['accent'],
-                                  hover_color=self.colors['accent_hover'],
-                                  width=180, height=45,
-                                  font=("Segoe UI", 12, "bold"),
-                                  corner_radius=8)
-        rescan_btn.pack(side="left", padx=10)
-
-        export_btn = ctk.CTkButton(btn_frame, text="📤 Export Results",
-                                  command=lambda: self.export_fix_results(results, result_window),
-                                  fg_color=self.colors['success'],
-                                  hover_color="#229954",
-                                  width=180, height=45,
-                                  font=("Segoe UI", 12, "bold"),
-                                  corner_radius=8)
-        export_btn.pack(side="left", padx=10)
-
-        close_btn = ctk.CTkButton(btn_frame, text="✗ Close",
-                                 command=result_window.destroy,
-                                 fg_color=self.colors['text_secondary'],
-                                 hover_color="#7f8c8d",
-                                 width=120, height=45,
-                                 font=("Segoe UI", 12, "bold"),
-                                 corner_radius=8)
-        close_btn.pack(side="left", padx=10)
-
-        self.fix_button.configure(state="normal", text="🔧 Fix Issues")
-        self.status_label.configure(text="Fixes applied - Ready for new scan")
-
-    def export_fix_results(self, results, parent_window):
-        """Export fix results to file"""
-        filename = filedialog.asksaveasfilename(
-            parent=parent_window,
-            defaultextension=".txt",
-            filetypes=[
-                ("Text files", "*.txt"),
-                ("Log files", "*.log"),
-                ("All files", "*.*")
-            ],
-            initialfile=f"raven_x_fix_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        )
-
-        if filename:
-            try:
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("\n".join(results))
-                self.show_info(f"Results exported to:\n{filename}")
-            except Exception as e:
-                self.show_error(f"Failed to export results: {str(e)}")
+            messagebox.showerror("Error", f"Failed to save script:\n{e}", parent=self.root)
 
     def export_report(self):
-        """Export scan report in selected format"""
         if not self.vulnerabilities:
-            self.show_info("No scan results to export.")
-            return
+            messagebox.showinfo("Nothing to Export","Run a scan first.",parent=self.root); return
+        fmt = self.config.get("export_format","html").lower()
+        if fmt=="html":
+            content  = self.scanner.generate_html_report()
+            ext,mime = "html","HTML files"
+        elif fmt=="json":
+            pct,level = self.scanner.risk_score()
+            content   = json.dumps({"scan_id":self.scanner.scan_id,
+                                    "timestamp":datetime.now().isoformat(),
+                                    "risk_score":pct,"risk_level":level,
+                                    "vulnerabilities":self.vulnerabilities},indent=2,default=str)
+            ext,mime = "json","JSON files"
+        else:
+            import io; buf=io.StringIO(); w=csv.writer(buf)
+            w.writerow(["Severity","Category","Title","Details","Remediation","CVSS"])
+            for v in self.vulnerabilities:
+                w.writerow([v["severity"],v["category"],v["title"],
+                            v["details"],v.get("remediation",""),cvss_for(v)])
+            content=buf.getvalue(); ext,mime="csv","CSV files"
 
-        format_map = {
-            'HTML': 'html',
-            'JSON': 'json',
-            'CSV': 'csv',
-            'PDF': 'html'  # PDF would need additional library
-        }
+        fname = filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=f".{ext}",
+            filetypes=[(mime,f"*.{ext}"),("All Files","*.*")],
+            initialfile=f"RAVENX_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}")
+        if fname:
+            with open(fname,"w",encoding="utf-8") as f: f.write(content)
+            messagebox.showinfo("Exported",f"Report saved:\n{fname}",parent=self.root)
+            if ext=="html": webbrowser.open(f"file://{os.path.abspath(fname)}")
 
-        selected_format = self.export_format.get()
-        format_ext = format_map.get(selected_format, 'html')
+    def copy_results(self):
+        text = self._res_txt.get("1.0","end-1c")
+        self.root.clipboard_clear(); self.root.clipboard_append(text)
+        messagebox.showinfo("Copied","Results copied to clipboard!",parent=self.root)
 
-        filename = filedialog.asksaveasfilename(
-            parent=self.root,
-            defaultextension=f".{format_ext.lower()}",
-            filetypes=[
-                (f"{selected_format} files", f"*.{format_ext.lower()}"),
-                ("All files", "*.*")
-            ],
-            initialfile=f"raven_x_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{format_ext.lower()}"
-        )
+    def fix_vulnerabilities(self):
+        if not self.vulnerabilities:
+            messagebox.showinfo("Nothing","Run a scan first.",parent=self.root); return
+        if self.config["safe_mode"]:
+            if not messagebox.askyesno("Safe Mode Active",
+                "Safe Mode is ON.\nDisable it and apply fixes?",parent=self.root): return
+            self.config["safe_mode"]=False; self._safe_var.set(False)
+        if not messagebox.askyesno("Confirm Fixes",
+            f"Apply automated fixes for {len(self.vulnerabilities)} issues?\n\nA restore point will be created first (if enabled).",
+            parent=self.root): return
+        if self.config.get("auto_create_restore") and is_admin():
+            self._status_lbl.configure(text="Creating restore point…")
+            run_ps('Checkpoint-Computer -Description "RAVEN-X Pre-Fix" -RestorePointType MODIFY_SETTINGS',30)
+        self._status_lbl.configure(text="Applying fixes…")
+        self._btns["fix"].configure(state="disabled",text="Fixing…")
+        def run():
+            results=[]
+            for v in self.vulnerabilities:
+                cmd = v.get("powershell_command","").strip()
+                if not cmd or cmd.startswith("#"): continue
+                try:
+                    r = run_ps(cmd, timeout=20)
+                    # run_ps returns None on failure; treat as failure
+                    if r is None:
+                        results.append(f"✗ {v['title']} – command failed (no output)")
+                    else:
+                        results.append(f"✓ {v['title']}")
+                except Exception as e:
+                    results.append(f"✗ {v['title']}: {e}")
+            self.root.after(0,lambda: self._show_fix_results(results))
+        threading.Thread(target=run,daemon=True).start()
 
-        if filename:
-            try:
-                report = self.scanner.generate_report(format=format_ext.lower())
-
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(report)
-
-                self.show_info(f"Report exported to:\n{filename}")
-
-                # Open the file if it's HTML
-                if format_ext.lower() == 'html' and messagebox.askyesno(
-                    "Open Report",
-                    "Would you like to open the HTML report in your browser?",
-                    parent=self.root
-                ):
-                    webbrowser.open(f"file://{os.path.abspath(filename)}")
-
-            except Exception as e:
-                self.show_error(f"Failed to export report: {str(e)}")
+    def _show_fix_results(self, results):
+        self._btns["fix"].configure(state="normal",text="🔧  Fix Issues")
+        self._status_lbl.configure(text="Fixes applied – run new scan to verify")
+        ok = sum(1 for r in results if r.startswith("✓"))
+        fail = sum(1 for r in results if r.startswith("✗"))
+        summary = f"FIXES APPLIED\n{'─'*40}\n"
+        summary += "\n".join(results)
+        summary += f"\n{'─'*40}\n✓ {ok} fixed   ✗ {fail} failed\n"
+        if messagebox.askyesno("Fix Results",
+            f"{ok} fixes applied, {fail} failed.\n\nRun a new scan to verify?\nReboot to see the changes",parent=self.root):
+            self.start_scan()
 
     def get_ai_analysis(self):
-        """Get AI analysis of vulnerabilities"""
         if not self.vulnerabilities:
-            self.show_info("No vulnerabilities to analyze.")
-            return
+            messagebox.showinfo("Nothing","Run a scan first.",parent=self.root); return
+        self._btns["ai"].configure(state="disabled",text="Analyzing…")
+        url   = self._ai_lm_studio_url.get()
+        model = self._ai_model_name.get()
+        self.config["lm_studio_url"]=url; self.config["model_name"]=model
 
-        self.ai_button.configure(state="disabled", text="Analyzing...")
+        summary = "\n\n".join(
+            f"[{v['severity'].upper()}] {v['title']}\nCategory: {v['category']}\n"
+            f"Details: {v['details']}\nFix: {v.get('remediation','')}"
+            for v in self.vulnerabilities[:20])
 
-        def analyze_thread():
+        def run():
             try:
-                self.config['lm_studio_url'] = self.url_entry.get()
-                self.config['model_name'] = self.model_entry.get()
-
-                # Prepare vulnerability summary
-                vuln_summary = "\n\n".join([
-                    f"## {v['severity'].upper()}: {v['title']}\n"
-                    f"**Category**: {v['category']}\n"
-                    f"**Component**: {v['component']}\n"
-                    f"**Details**: {v['details']}\n"
-                    f"**Remediation**: {v.get('remediation', 'Not specified')}"
-                    for v in self.vulnerabilities[:20]  # Limit to first 20 for token limits
-                ])
-
-                client = OpenAI(base_url=self.config['lm_studio_url'], api_key="lm-studio")
-
-                prompt = f"""You are a cybersecurity expert analyzing Windows system vulnerabilities.
-
-DETECTED VULNERABILITIES:
-{vuln_summary}
-
-SYSTEM CONTEXT:
-- This is a Windows system security assessment
-- Vulnerabilities have been detected by automated scanning
-- The user may have limited technical expertise
-
-PLEASE PROVIDE:
-1. EXECUTIVE SUMMARY (2-3 paragraphs)
-   - Overall risk assessment
-   - Most critical issues to address immediately
-
-2. PRIORITIZED REMEDIATION PLAN
-   - Top 5 issues to fix first (with severity and reasoning)
-   - Step-by-step instructions for each (clear, actionable)
-
-3. SECURITY RECOMMENDATIONS
-   - General security best practices
-   - Monitoring and maintenance advice
-   - Additional security tools to consider
-
-4. COMPLIANCE & STANDARDS
-   - How these findings relate to common standards (CIS, NIST, etc.)
-   - Documentation and reporting advice
-
-FORMAT:
-- Use clear headings and bullet points
-- Avoid technical jargon where possible
-- Provide specific commands or steps when applicable
-- Include warnings about potential risks
-
-IMPORTANT: Be practical and actionable. The user needs clear guidance.
-"""
-
-                response = client.chat.completions.create(
-                    model=self.config['model_name'],
-                    messages=[
-                        {"role": "system", "content": "You are a cybersecurity expert specializing in Windows security."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.7,
-                    max_tokens=3000,
-                    stream=False
-                )
-
-                analysis = response.choices[0].message.content
-                self.root.after(0, lambda: self.show_ai_analysis(analysis))
-
-            except Exception as e:
-                error_msg = str(e)
-                error_display = f"""## CONNECTION ERROR
-
-Failed to connect to LM Studio: {error_msg}
-
-### TROUBLESHOOTING STEPS:
-
-1. **Ensure LM Studio is running**
-   - Open LM Studio application
-   - Load a model (like Llama 3.1, CodeLlama, etc.)
-   - Start the local server (usually http://localhost:1234)
-
-2. **Verify Configuration**
-   - URL: {self.config['lm_studio_url']}
-   - Model: {self.config['model_name']}
-   - Check if the model is loaded in LM Studio
-
-3. **Alternative Actions**
-   - Try a different model if available
-   - Check firewall settings
-   - Restart LM Studio
-
-4. **Continue Without AI**
-   - You can still review vulnerabilities manually
-   - Use the remediation suggestions in the scan results
-   - Consult online security resources
-
-**Note:** AI analysis requires LM Studio running locally with a compatible model.
-"""
-                self.root.after(0, lambda: self.show_ai_analysis(error_display))
-            finally:
-                self.root.after(0, lambda: self.ai_button.configure(state="normal", text="🤖 AI Analysis"))
-
-        threading.Thread(target=analyze_thread, daemon=True).start()
-
-    def show_ai_analysis(self, analysis):
-        """Display AI analysis in a window"""
-        ai_window = ctk.CTkToplevel(self.root)
-        ai_window.title("AI Security Analysis")
-        ai_window.geometry("1200x800")
-
-        # Center the window
-        ai_window.update_idletasks()
-        width = ai_window.winfo_width()
-        height = ai_window.winfo_height()
-        x = (ai_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (ai_window.winfo_screenheight() // 2) - (height // 2)
-        ai_window.geometry(f'{width}x{height}+{x}+{y}')
-
-        # Header
-        header_frame = ctk.CTkFrame(ai_window, fg_color=self.colors['bg_secondary'],
-                                   corner_radius=0, height=80)
-        header_frame.pack(fill="x", padx=0, pady=0)
-        header_frame.pack_propagate(False)
-
-        header_content = ctk.CTkFrame(header_frame, fg_color="transparent")
-        header_content.pack(fill="both", expand=True, padx=25, pady=15)
-
-        header_title = ctk.CTkLabel(header_content, text="🤖 AI Security Analysis",
-                                   font=("Segoe UI", 20, "bold"),
-                                   text_color=self.colors['text_primary'])
-        header_title.pack(anchor="w")
-
-        subtitle = ctk.CTkLabel(header_content, text=f"Generated by {self.config['model_name']} | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                               font=("Segoe UI", 11),
-                               text_color=self.colors['text_secondary'])
-        subtitle.pack(anchor="w", pady=(5, 0))
-
-        # Analysis text with scrollbar
-        text_frame = ctk.CTkFrame(ai_window, fg_color=self.colors['bg_primary'])
-        text_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # Add scrollbar
-        text_container = ctk.CTkFrame(text_frame, fg_color=self.colors['bg_secondary'])
-        text_container.pack(fill="both", expand=True)
-
-        analysis_text = ctk.CTkTextbox(text_container,
-                                      font=("Segoe UI", 11),
-                                      fg_color=self.colors['bg_secondary'],
-                                      text_color=self.colors['text_primary'],
-                                      border_width=0,
-                                      wrap="word")
-
-        scrollbar = ctk.CTkScrollbar(text_container, command=analysis_text.yview)
-        analysis_text.configure(yscrollcommand=scrollbar.set)
-
-        analysis_text.pack(side="left", fill="both", expand=True, padx=0, pady=0)
-        scrollbar.pack(side="right", fill="y", padx=0, pady=0)
-
-        # Insert and format the analysis
-        analysis_text.insert("1.0", analysis)
-
-        # Apply some basic formatting
-        analysis_text.configure(state="normal")
-
-        # Make headers bold (basic formatting)
-        text_content = analysis_text.get("1.0", "end")
-        lines = text_content.split('\n')
-
-        analysis_text.delete("1.0", "end")
-        for line in lines:
-            if line.strip().startswith('#') or line.strip().upper() == line.strip() and len(line.strip()) > 3:
-                # This is likely a header
-                analysis_text.insert("end", line + "\n", "header")
-            else:
-                analysis_text.insert("end", line + "\n")
-
-        analysis_text.tag_configure("header", font=("Segoe UI", 12, "bold"), foreground=self.colors['accent'])
-        analysis_text.configure(state="disabled")
-
-        # Buttons
-        btn_frame = ctk.CTkFrame(ai_window, fg_color=self.colors['bg_primary'])
-        btn_frame.pack(pady=20)
-
-        export_btn = ctk.CTkButton(btn_frame, text="💾 Save Analysis",
-                                  command=lambda: self.export_analysis(analysis, ai_window),
-                                  fg_color=self.colors['accent'],
-                                  hover_color=self.colors['accent_hover'],
-                                  width=180, height=45,
-                                  font=("Segoe UI", 12, "bold"),
-                                  corner_radius=8)
-        export_btn.pack(side="left", padx=10)
-
-        close_btn = ctk.CTkButton(btn_frame, text="✗ Close",
-                                 command=ai_window.destroy,
-                                 fg_color=self.colors['text_secondary'],
-                                 hover_color="#7f8c8d",
-                                 width=120, height=45,
-                                 font=("Segoe UI", 12, "bold"),
-                                 corner_radius=8)
-        close_btn.pack(side="left", padx=10)
-
-    def export_analysis(self, analysis, parent_window):
-        """Export AI analysis to file"""
-        filename = filedialog.asksaveasfilename(
-            parent=parent_window,
-            defaultextension=".txt",
-            filetypes=[
-                ("Text files", "*.txt"),
-                ("Markdown files", "*.md"),
-                ("All files", "*.*")
-            ],
-            initialfile=f"raven_x_ai_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        )
-
-        if filename:
-            try:
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(f"RAVEN-X AI Security Analysis\n")
-                    f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Model: {self.config['model_name']}\n")
-                    f.write("=" * 60 + "\n\n")
-                    f.write(analysis)
-                self.show_info(f"Analysis exported to:\n{filename}")
-            except Exception as e:
-                self.show_error(f"Failed to export analysis: {str(e)}")
-
-    def test_connection(self):
-        """Test connection to LM Studio"""
-        self.test_btn.configure(state="disabled", text="Testing...")
-        self.connection_status.configure(text="● Testing...", text_color=self.colors['medium'])
-
-        def test_thread():
-            try:
-                url = self.url_entry.get()
-                model = self.model_entry.get()
-
-                self.config['lm_studio_url'] = url
-                self.config['model_name'] = model
-
                 client = OpenAI(base_url=url, api_key="lm-studio")
-
-                # Test with a simple prompt
-                response = client.chat.completions.create(
+                resp   = client.chat.completions.create(
                     model=model,
-                    messages=[{"role": "user", "content": "Hello, please respond with 'OK' if you can read this."}],
-                    max_tokens=10,
-                    temperature=0.1
-                )
-
-                if response.choices[0].message.content:
-                    self.root.after(0, lambda: self.connection_status.configure(
-                        text="● Connected", text_color=self.colors['success']))
-                    logger.info(f"LM Studio connection successful: {model}")
-                else:
-                    self.root.after(0, lambda: self.connection_status.configure(
-                        text="● No response", text_color=self.colors['warning']))
-
+                    messages=[
+                        {"role":"system","content":"You are an expert Windows security analyst."},
+                        {"role":"user","content":
+                            f"Analyse these vulnerabilities and provide:\n"
+                            f"1. Executive summary\n2. Top 5 priorities\n"
+                            f"3. Step-by-step remediation\n4. Compliance implications\n\n{summary}"}
+                    ], temperature=0.7, max_tokens=3000)
+                analysis = resp.choices[0].message.content
             except Exception as e:
-                logger.error(f"LM Studio connection failed: {e}")
-                self.root.after(0, lambda: self.connection_status.configure(
-                    text="● Connection failed", text_color=self.colors['critical']))
-            finally:
-                self.root.after(0, lambda: self.test_btn.configure(state="normal", text="Test Connection"))
+                analysis = f"⚠️  Could not connect to LM Studio.\n\nError: {e}\n\nEnsure LM Studio is running at {url}."
+            self.root.after(0,lambda: self._show_ai_window(analysis))
+            self.root.after(0,lambda: self._btns["ai"].configure(state="normal",text="🤖  AI Analysis"))
+        threading.Thread(target=run,daemon=True).start()
 
-        threading.Thread(target=test_thread, daemon=True).start()
+    def _show_ai_window(self, text):
+        win = ctk.CTkToplevel(self.root)
+        win.title("AI Security Analysis"); win.geometry("1100x750")
+        ctk.CTkLabel(win,text="🤖 AI Security Analysis",font=("Segoe UI",18,"bold")).pack(pady=20)
+        tb = ctk.CTkTextbox(win,font=("Segoe UI",11),wrap="word")
+        tb.pack(fill="both",expand=True,padx=20,pady=(0,10))
+        tb.insert("1.0",text); tb.configure(state="disabled")
+        ctk.CTkButton(win,text="Close",command=win.destroy,width=120).pack(pady=10)
 
-    def toggle_safe_mode(self):
-        """Toggle safe mode on/off"""
-        self.config['safe_mode'] = self.safe_mode_var.get()
-        status = "enabled" if self.config['safe_mode'] else "disabled"
-        self.status_label.configure(text=f"Safe mode {status}")
-        logger.info(f"Safe mode {status}")
+    def _test_connection(self):
+        self._conn_status.configure(text="● Testing…",text_color=self.C["medium"])
+        url   = self._ai_lm_studio_url.get()
+        model = self._ai_model_name.get()
+        def run():
+            try:
+                client=OpenAI(base_url=url,api_key="lm-studio")
+                resp=client.chat.completions.create(
+                    model=model,messages=[{"role":"user","content":"Reply with OK"}],max_tokens=5)
+                self.root.after(0,lambda: self._conn_status.configure(
+                    text="● Connected ✅",text_color=self.C["success"]))
+            except Exception as e:
+                self.root.after(0,lambda: self._conn_status.configure(
+                    text="● Failed ✗",text_color=self.C["critical"]))
+        threading.Thread(target=run,daemon=True).start()
 
-    def set_schedule(self):
-        """Set scheduled scans"""
-        try:
-            hours = int(self.schedule_entry.get())
-            if hours < 1 or hours > 168:  # Max 1 week
-                self.show_error("Please enter a value between 1 and 168 hours.")
-                return
+    def _toggle_safe(self):
+        self.config["safe_mode"]=self._safe_var.get(); self._save_config()
 
-            self.config['schedule_interval'] = hours
-            self.show_info(f"Scheduled scans set to every {hours} hours.")
-            logger.info(f"Scan schedule set to {hours} hours")
-
-        except ValueError:
-            self.show_error("Please enter a valid number of hours.")
-
-    def save_settings(self):
-        """Save application settings"""
-        try:
-            self.config['auto_create_restore'] = self.restore_var.get()
-            self.config['schedule_interval'] = int(self.schedule_entry.get())
-            self.config['export_format'] = self.export_format.get().lower()
-
-            # Update logging level
-            log_level = self.log_level.get()
-            logging.getLogger().setLevel(getattr(logging, log_level))
-
-            self.show_info("Settings saved successfully.")
-            logger.info(f"Settings saved: {self.config}")
-
-        except Exception as e:
-            self.show_error(f"Failed to save settings: {str(e)}")
-
-    def show_info(self, message):
-        """Show information message"""
-        messagebox.showinfo("Information", message, parent=self.root)
-
-    def show_error(self, message):
-        """Show error message"""
-        messagebox.showerror("Error", message, parent=self.root)
-
+    # ── run ────────────────────────────────────────────────────────────────
     def run(self):
-        """Run the application"""
-        # Show disclaimer on first run
-        try:
-            disclaimer_shown = os.path.exists('.disclaimer_shown')
-            if not disclaimer_shown:
-                disclaimer = """
-                ⚠️  RAVEN-X SECURITY SCANNER - DISCLAIMER
-
-                This tool is for authorized security testing and educational purposes only.
-
-                BY USING THIS SOFTWARE, YOU AGREE THAT:
-
-                1. You have proper authorization to scan the target system
-                2. You understand the risks of automated security fixes
-                3. You will backup important data before making changes
-                4. The developers are not responsible for any system damage
-                5. This tool is for legitimate security assessment only
-
-                Always test in a controlled environment first.
-                """
-
-                response = messagebox.askyesno(
-                    "Disclaimer",
-                    disclaimer + "\n\nDo you accept these terms and conditions?",
-                    parent=self.root
-                )
-
-                if response:
-                    with open('.disclaimer_shown', 'w') as f:
-                        f.write('1')
-                else:
-                    self.root.destroy()
-                    return
-        except:
-            pass
-
+        if not os.path.exists(".disclaimer_shown"):
+            if messagebox.askyesno("Disclaimer",
+                "RAVEN-X is for AUTHORIZED security testing only.\n\n"
+                "By continuing you confirm you have permission to scan this system.\n\n"
+                "Accept?", parent=self.root):
+                open(".disclaimer_shown","w").write("1")
+            else:
+                self.root.destroy(); return
         self.root.mainloop()
 
+# ── welcome message ─────────────────────────────────────────────────────────
+WELCOME_MSG = """╔══════════════════════════════════════════════════════════════╗
+║          RAVEN-X Enterprise Security Scanner v4.0            ║
+║          AI-Powered Windows Vulnerability Assessment         ║
+╚══════════════════════════════════════════════════════════════╝
 
+Welcome! This enterprise scanner checks 26 security categories:
+
+  Security Checks              Compliance & Reporting
+  ─────────────────            ──────────────────────
+  Windows Updates              CIS Controls
+  Firewall (all profiles)      NIST 800-53
+  Windows Defender             ISO 27001
+  Defender Exclusions          PCI-DSS
+  UAC Configuration
+  Auto-Login                   Enterprise Features
+  Remote Desktop / NLA         ─────────────────────
+  Guest & Admin Accounts       Email Alerts
+  Open Ports                   Scan History DB
+  Network Sharing              Executive Dashboard
+  SMBv1 Protocol               Trend Analysis
+  Password Policy              Compliance Scoring
+  BitLocker Encryption         AI-Powered Analysis
+  PowerShell Policy            Remediation Scripts
+  Audit Policy                 HTML/JSON/CSV Reports
+  AutoRun Settings
+  Suspicious Startup Programs
+  Wi-Fi Security
+  Services
+  NTP / Time Sync
+  Telnet Client
+  DNS Settings
+  File Integrity
+
+Click "Start Full Scan" for a comprehensive assessment,
+or "Quick Scan" for a rapid critical-only check.
+"""
+
+# ── entry point ─────────────────────────────────────────────────────────────
 def main():
-    """Main entry point with enhanced startup"""
     print("""
-    ╔══════════════════════════════════════════════════════════════╗
-    ║                 RAVEN-X SECURITY SCANNER v3.0                ║
-    ║         AI-Powered Windows Vulnerability Scanner             ║
-    ╚══════════════════════════════════════════════════════════════╝
-
-    Version: 3.0 Professional Edition
-    Author: Security Research Team
-    License: Educational/Authorized Use Only
-
-    Loading...
-    """)
-
-    # Check requirements
-    try:
-        import ctypes
-        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
-
-        if not is_admin:
-            print("⚠️  Warning: Not running as administrator.")
-            print("   Some scans and fixes may be limited.")
-            print("   For full functionality, run as Administrator.\n")
-
-        # Check Python version
-        if sys.version_info < (3, 7):
-            print("❌ Error: Python 3.7 or higher is required.")
-            sys.exit(1)
-
-    except Exception as e:
-        print(f"⚠️  Warning: Could not check privileges: {e}")
-
-    # Start the application
-    try:
-        app = VulnerabilityGUI()
-        app.run()
-    except Exception as e:
-        print(f"❌ Fatal error: {e}")
-        print("\nTroubleshooting tips:")
-        print("1. Run as Administrator")
-        print("2. Install requirements: pip install -r requirements.txt")
-        print("3. Check Windows version compatibility")
-        input("\nPress Enter to exit...")
-
+╔══════════════════════════════════════════════════════════════╗
+║          RAVEN-X Enterprise Security Scanner v4.0            ║
+╚══════════════════════════════════════════════════════════════╝
+Loading…
+""")
+    if sys.version_info < (3,7):
+        print("Python 3.7+ required."); sys.exit(1)
+    VulnerabilityGUI().run()
 
 if __name__ == "__main__":
     main()

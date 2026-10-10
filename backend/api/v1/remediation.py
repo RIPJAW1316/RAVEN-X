@@ -10,20 +10,27 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
+import logging
 
-from ...core.database.database import get_async_db_session
+from ...core.database.database import get_async_db_session, db_manager
 from ...core.database.models import Scan, Vulnerability, Fix
 from ...core.remediation.auto_fixer import AutoFixer
 from ...core.ai.learning_engine import learning_engine
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger("ravenx.audit")
 
 # Pydantic models
 class RemediationRequest(BaseModel):
     vulnerability_ids: List[str]
     auto_fix: bool = Field(default=False, description="Apply fixes automatically")
+    allow_destructive: bool = Field(
+        default=False,
+        description="Permit system changes; when false, execution is forced to dry-run"
+    )
     create_restore_point: bool = Field(default=True, description="Create system restore point")
-    dry_run: bool = Field(default=False, description="Simulate fixes without applying")
+    dry_run: bool = Field(default=True, description="Simulate fixes without applying")
 
 class RemediationResponse(BaseModel):
     remediation_id: str
@@ -60,9 +67,33 @@ async def fix_vulnerabilities(
         
         if not vulnerabilities:
             raise HTTPException(status_code=404, detail="No vulnerabilities found")
-        
+
+        # Safety guard: destructive remediation must be explicitly allowed
+        if request.auto_fix and not request.allow_destructive and not request.dry_run:
+            raise HTTPException(
+                status_code=403,
+                detail="Destructive remediation requires allow_destructive=true or enable dry_run."
+            )
+
+        # Enforce conservative defaults
+        auto_fix = request.auto_fix and request.allow_destructive and not request.dry_run
+        dry_run = request.dry_run or not request.allow_destructive
+        create_restore_point = True if auto_fix else request.create_restore_point
+
         remediation_id = str(uuid.uuid4())
-        
+
+        audit_logger.info(
+            "Remediation requested",
+            extra={
+                "remediation_id": remediation_id,
+                "vulnerability_count": len(vulnerabilities),
+                "auto_fix": auto_fix,
+                "allow_destructive": request.allow_destructive,
+                "dry_run": dry_run,
+                "create_restore_point": create_restore_point,
+            },
+        )
+
         # Start remediation in background
         background_tasks.add_task(
             execute_remediation,
@@ -80,11 +111,11 @@ async def fix_vulnerabilities(
                 }
                 for v in vulnerabilities
             ],
-            auto_fix=request.auto_fix,
-            create_restore_point=request.create_restore_point,
-            dry_run=request.dry_run
+            auto_fix=auto_fix,
+            create_restore_point=create_restore_point,
+            dry_run=dry_run
         )
-        
+
         return RemediationResponse(
             remediation_id=remediation_id,
             status="started",

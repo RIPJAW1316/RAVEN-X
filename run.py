@@ -22,12 +22,12 @@ import yaml
 BANNER = """
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
-║   ██████╗  █████╗ ██╗   ██╗███████╗███╗   ██╗      ██╗  ██╗                ║
-║   ██╔══██╗██╔══██╗██║   ██║██╔════╝████╗  ██║      ╚██╗██╔╝                ║
-║   ██████╔╝███████║██║   ██║█████╗  ██╔██╗ ██║       ╚███╔╝                 ║
-║   ██╔══██╗██╔══██║╚██╗ ██╔╝██╔══╝  ██║╚██╗██║       ██╔██╗                 ║
-║   ██║  ██║██║  ██║ ╚████╔╝ ███████╗██║ ╚████║      ██╔╝ ██╗                ║
-║   ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝      ╚═╝  ╚═╝                ║
+║   ██████╗  █████╗ ██╗   ██╗███████╗███╗   ██╗      ██╗  ██╗                  ║
+║   ██╔══██╗██╔══██╗██║   ██║██╔════╝████╗  ██║      ╚██╗██╔╝                  ║
+║   ██████╔╝███████║██║   ██║█████╗  ██╔██╗ ██║       ╚███╔╝                   ║
+║   ██╔══██╗██╔══██║╚██╗ ██╔╝██╔══╝  ██║╚██╗██║       ██╔██╗                   ║
+║   ██║  ██║██║  ██║ ╚████╔╝ ███████╗██║ ╚████║      ██╔╝ ██╗                  ║
+║   ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝      ╚═╝  ╚═╝                  ║
 ║                                                                              ║
 ║                    ENTERPRISE SECURITY PLATFORM v4.0                         ║
 ║                  AI-Powered Vulnerability Scanner & Fixer                    ║
@@ -73,16 +73,16 @@ class RAVENXLauncher:
         logger.info("📦 Checking dependencies...")
         
         required_packages = [
-            'fastapi', 'uvicorn', 'sqlalchemy', 'pydantic',
-            'customtkinter', 'psutil', 'openai', 'scikit-learn',
-            'jinja2', 'requests', 'websockets', 'pyyaml'
+            ('fastapi','fastapi'), ('uvicorn','uvicorn'), ('sqlalchemy','sqlalchemy'), ('pydantic','pydantic'),
+            ('customtkinter','customtkinter'), ('psutil','psutil'), ('openai','openai'), ('scikit-learn','sklearn'),
+            ('jinja2','jinja2'), ('requests','requests'), ('websockets','websockets'), ('pyyaml','yaml')
         ]
         
         missing = []
         
-        for package in required_packages:
+        for package, import_name in required_packages:
             try:
-                __import__(package.replace('-', '_'))
+                __import__(import_name)
             except ImportError:
                 missing.append(package)
         
@@ -134,7 +134,7 @@ class RAVENXLauncher:
             logger.info("✅ Database initialized")
             
         except Exception as e:
-            logger.error(f"❌ Database initialization failed: {e}")
+            logger.error("❌ Database initialization failed error_type=%s", type(e).__name__)
             sys.exit(1)
     
     def start_backend(self):
@@ -145,16 +145,27 @@ class RAVENXLauncher:
             sys.executable,
             "-m", "uvicorn",
             "backend.api.main:app",
-            "--host", "0.0.0.0",
-            "--port", "8000",
-            "--reload"
+            "--host", "127.0.0.1",
+            "--port", "8000"
         ]
         
+        # This launcher is the legacy/personal entry point: the bundled GUI and
+        # the older desktop workflow call /api/v1/scan, /analysis, /remediation
+        # and /system.  Those routers are off by default in the enterprise
+        # control plane, so opt in explicitly here to preserve the historical
+        # behaviour of `python run.py`.  Keep this unauthenticated legacy API
+        # on loopback only; a LAN control plane uses the separate enterprise
+        # launcher with legacy routes disabled.
+        backend_env = dict(os.environ)
+        backend_env.setdefault("RAVENX_ENVIRONMENT", "development")
+        backend_env.setdefault("RAVENX_ENABLE_LEGACY_ROUTES", "true")
+
         backend_process = subprocess.Popen(
             backend_cmd,
             cwd=self.root_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            env=backend_env,
+            stdout=None,
+            stderr=None
         )
         
         self.processes.append(backend_process)
@@ -163,15 +174,16 @@ class RAVENXLauncher:
         time.sleep(3)
         
         # Check if backend is running
-        import requests
+        from urllib.request import urlopen
         try:
-            response = requests.get("http://localhost:8000/health", timeout=5)
-            if response.status_code == 200:
+            with urlopen("http://127.0.0.1:8000/health", timeout=5) as response:
+                healthy = response.status == 200
+            if healthy:
                 logger.info("✅ Backend API running on http://localhost:8000")
                 logger.info("📖 API Docs: http://localhost:8000/api/docs")
             else:
                 logger.warning("⚠️  Backend started but health check failed")
-        except:
+        except Exception:
             logger.warning("⚠️  Backend starting... (may take a moment)")
     
     def start_gui(self):
@@ -306,9 +318,9 @@ application:
   environment: "production"
 
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8000
-  workers: 4
+  workers: 1
 
 database:
   type: "sqlite"

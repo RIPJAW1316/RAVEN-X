@@ -10,13 +10,15 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
+import logging
 
-from ...core.database.database import get_async_db_session
+from ...core.database.database import get_async_db_session, db_manager
 from ...core.database.models import Scan, Vulnerability, AIAnalysis
 from ...core.ai.llm_client import LLMClient
 from ...core.ai.learning_engine import learning_engine
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Pydantic models
 class AnalysisRequest(BaseModel):

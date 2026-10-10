@@ -10,13 +10,22 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 import uuid
+import logging
+import asyncio
 
-from ...core.database.database import get_async_db_session
+from ...core.database.database import get_async_db_session, db_manager
 from ...core.database.models import Scan, Vulnerability
 from ...core.scanner.enhanced_scanner import EnhancedScanner
 from ...core.ai.learning_engine import learning_engine
+from ...application.assessment.local_runner import LocalAssessmentRunner
+from ...application.assessment.local_orchestrator import LocalAssessmentOrchestrator
+from ...application.assessment.options import AssessmentOptions
+from ...application.assessment.run_local_assessment import RunLocalAssessment
+from ...application.scanner import LocalTargetCapabilityProvider, ScannerRegistry, legacy_scanner_adapters
+from ...infrastructure.persistence.sqlalchemy_assessment_repository import SQLAlchemyAssessmentRepository
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Pydantic models
 class ScanRequest(BaseModel):
@@ -24,6 +33,10 @@ class ScanRequest(BaseModel):
     target_categories: Optional[List[str]] = Field(default=None, description="Specific categories to scan")
     deep_scan: bool = Field(default=True, description="Enable deep scanning")
     ai_analysis: bool = Field(default=True, description="Enable AI-powered analysis")
+    scanner_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Optional local scanner IDs; omitted preserves the legacy full scan",
+    )
 
 class ScanResponse(BaseModel):
     scan_id: str
@@ -55,6 +68,19 @@ class ScanResultResponse(BaseModel):
 
 # Global scanner instance
 scanner = EnhancedScanner()
+local_assessment_runner = LocalAssessmentRunner()
+local_assessment_orchestrator = LocalAssessmentOrchestrator(
+    registry=ScannerRegistry(legacy_scanner_adapters()),
+    capability_provider=LocalTargetCapabilityProvider().capabilities_for,
+)
+
+
+def _local_assessment_use_case() -> RunLocalAssessment:
+    return RunLocalAssessment(
+        runner=local_assessment_runner,
+        repository=SQLAlchemyAssessmentRepository(db_manager),
+        orchestrator=local_assessment_orchestrator,
+    )
 
 @router.post("/start", response_model=ScanResponse)
 async def start_scan(
@@ -66,6 +92,35 @@ async def start_scan(
     Start a new security scan
     """
     try:
+        if request.scanner_ids is not None and any(not scanner_id.strip() for scanner_id in request.scanner_ids):
+            raise HTTPException(status_code=422, detail="scanner_ids must contain non-empty strings")
+        if request.scanner_ids is not None and (
+            request.scan_type != "full" or request.target_categories is not None or not request.deep_scan
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="scanner_ids can only be combined with the default full local scan options",
+            )
+
+        # The default local scan now uses the shared assessment-domain flow.
+        # Legacy scanner.py has no equivalent quick/targeted controls, so those
+        # existing API variants retain their EnhancedScanner behavior for now.
+        if request.scan_type == "full" and request.target_categories is None and request.deep_scan:
+            use_case = _local_assessment_use_case()
+            scan_id, target = use_case.start(scan_type=request.scan_type)
+            options = (
+                AssessmentOptions(scanner_ids=tuple(request.scanner_ids))
+                if request.scanner_ids is not None
+                else None
+            )
+            background_tasks.add_task(execute_local_assessment, scan_id, target, options)
+            return ScanResponse(
+                scan_id=scan_id,
+                status="started",
+                message=f"Scan {scan_id} initiated successfully",
+                estimated_duration=300,
+            )
+
         # Create scan record
         scan_id = str(uuid.uuid4())
         
@@ -99,8 +154,26 @@ async def start_scan(
             estimated_duration=estimated_duration
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start scan: {str(e)}")
+
+
+async def execute_local_assessment(
+    scan_id: str,
+    target,
+    options: Optional[AssessmentOptions] = None,
+) -> None:
+    """Run the legacy scanner behind the domain use case in the background."""
+    try:
+        use_case = _local_assessment_use_case()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: use_case.execute(scan_id, target, options))
+    except Exception as error:
+        # The use case persists a failure when possible; logging preserves the
+        # original background-task failure for operational diagnosis.
+        logger.error(f"Local assessment {scan_id} could not be persisted: {error}")
 
 async def execute_scan(
     scan_id: str,

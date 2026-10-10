@@ -1,0 +1,9 @@
+{
+  "severity": "high",
+  "category": "Firewall",
+  "title": "Windows Firewall Disabled – DomainProfile",
+  "details": "Firewall is OFF for DomainProfile. Network attacks are possible.",
+  "component": "Windows Defender Firewall",
+  "remediation": "Enable the DomainProfile firewall profile.",
+  "powershell_command": "Set-NetFirewallProfile -Profile DomainProfile -Enabled True"
+}
