@@ -108,8 +108,8 @@ class ApplicationSettings:
             # them in production.
             raise ConfigurationError(
                 "production refuses legacy routes: unset RAVENX_ENABLE_LEGACY_ROUTES")
-        if self.environment == "production" and sys.version_info[:2] != (3, 11):
-            raise ConfigurationError("production requires supported Python 3.11 runtime")
+        if self.environment == "production" and sys.version_info[:2] != (3, 13):
+            raise ConfigurationError("production requires supported Python 3.13 runtime")
         return self
 
     def validate_pre_mount(self) -> "ApplicationSettings":

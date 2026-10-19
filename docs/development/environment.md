@@ -1,14 +1,14 @@
 # Development environment
 
 The supported Raven-X control-plane development and test interpreter is
-**Python 3.11.x**. Python 3.14 is currently unsupported: the active machine
+**Python 3.13.x**. Python 3.14 is currently unsupported: the active machine
 has dependency drift and the legacy optional AI/Windows features have not been
 validated against it.
 
 Create a clean environment and install the curated control-plane set:
 
 ```powershell
-py -3.11 -m venv .venv-ravenx
+py -3.13 -m venv .venv-ravenx
 .\.venv-ravenx\Scripts\python -m pip install --upgrade pip
 .\.venv-ravenx\Scripts\python -m pip install -r requirements-dev.txt
 .\.venv-ravenx\Scripts\python -m pytest

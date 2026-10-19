@@ -29,6 +29,7 @@ pip-delete-this-directory.txt
 # ------------------------------------------------- Virtual environments ---
 .venv
 .venv-ravenx/
+.venv-ravenx-313/
 venv/
 venv311/
 env/

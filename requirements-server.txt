@@ -1,4 +1,4 @@
-# Windows/local server runtime. Python 3.11; install offline from a wheelhouse when needed.
+# Windows/local server runtime. Python 3.13; install offline from a wheelhouse when needed.
 fastapi==0.118.0
 uvicorn==0.38.0
 SQLAlchemy==2.0.45

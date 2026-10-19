@@ -12,6 +12,7 @@ No network firewall rule is added unless -OpenPrivateFirewall is supplied.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ServerHost,
+    [string]$ServerName,
     [Parameter(Mandatory = $true)][string]$AdminEmail,
     [Parameter(Mandatory = $true)][string]$Organization,
     [ValidateRange(1024, 65535)][int]$Port = 8443,
@@ -41,8 +42,66 @@ $localAddresses = @(Get-NetIPAddress -IPAddress $ServerHost -AddressFamily IPv4 
 if ($localAddresses.Count -ne 1) { throw 'ServerHost must identify exactly one local interface.' }
 $profile = Get-NetConnectionProfile -InterfaceIndex $localAddresses[0].InterfaceIndex -ErrorAction Stop
 if ($profile.NetworkCategory -ne 'Private') { throw 'The server interface must use the Private network profile.' }
+$interfaceAlias = [string]$localAddresses[0].InterfaceAlias
+if ([string]::IsNullOrWhiteSpace($interfaceAlias) -or $interfaceAlias -match '[*?]') {
+    throw 'The server interface alias is empty or ambiguous.'
+}
+
+function Assert-ServerName([string]$Name) {
+    if ([string]::IsNullOrWhiteSpace($Name) -or $Name.Length -gt 253 -or
+        $Name -cnotmatch '\A(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\z') {
+        throw 'ServerName must be a fully qualified ASCII DNS name without a trailing dot.'
+    }
+    $parsedAddress = [Net.IPAddress]::None
+    if ([Net.IPAddress]::TryParse($Name, [ref]$parsedAddress)) {
+        throw 'ServerName must be a DNS name, not an IP address.'
+    }
+}
+
+function Assert-ServerNameResolution([string]$Name, [Net.IPAddress]$ExpectedAddress) {
+    $records = @(Resolve-DnsName -Name $Name -Type A -DnsOnly -NoHostsFile -ErrorAction Stop)
+    $addresses = @($records | Where-Object { $_.Type -eq 'A' -and $_.IPAddress } |
+        ForEach-Object {
+            $resolved = [Net.IPAddress]::None
+            if ([Net.IPAddress]::TryParse([string]$_.IPAddress, [ref]$resolved) -and
+                $resolved.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+                $resolved.ToString()
+            }
+        } | Sort-Object -Unique)
+    if ($addresses.Count -ne 1 -or $addresses[0] -ne $ExpectedAddress.ToString()) {
+        throw 'ServerName must resolve to exactly the selected ServerHost IPv4 address.'
+    }
+}
+
+function Write-ServerAddressConfig([string]$Path, [string]$Name, [int]$ListenPort,
+                                   [string]$InterfaceAlias) {
+    $payload = [ordered]@{
+        server_name = $Name
+        port = $ListenPort
+        interface_alias = $InterfaceAlias
+    } | ConvertTo-Json -Compress
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($payload)
+    $file = [IO.File]::Open($Path, [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $file.Write($bytes, 0, $bytes.Length)
+        $file.Flush($true)
+    } finally {
+        $file.Dispose()
+    }
+}
+
+if ($PSBoundParameters.ContainsKey('ServerName')) {
+    Assert-ServerName $ServerName
+    Assert-ServerNameResolution $ServerName $ip
+}
 
 $sourceRoot = Split-Path -Parent $PSScriptRoot
+$startServerSource = Join-Path $PSScriptRoot 'start-server.ps1'
+if ($PSBoundParameters.ContainsKey('ServerName') -and
+    -not (Test-Path -LiteralPath $startServerSource -PathType Leaf)) {
+    throw 'The protected server startup script is missing from the installation source.'
+}
 $installParent = Join-Path $env:ProgramFiles 'RAVEN-X'
 $installRoot = Join-Path $installParent 'Server'
 $dataRoot = Join-Path $env:ProgramData 'RAVEN-X\server'
@@ -131,42 +190,34 @@ Assert-NotReparseTree $env:ProgramFiles
 Assert-NoUntrustedWrite $env:ProgramFiles
 $launcher = Join-Path $env:WINDIR 'py.exe'
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
-    throw 'A system-wide Python 3.11 launcher at WINDIR\py.exe is required.'
+    throw 'A system-wide Python 3.13 launcher at WINDIR\py.exe is required.'
 }
 Assert-NotReparseTree $launcher
 Assert-NoUntrustedWrite $launcher
 # Listing registered runtimes does not execute a selected interpreter.
-# Never invoke py -3.11 before validating the chosen executable.
-$pythonListing = @(& $launcher -0p)
-if ($LASTEXITCODE -ne 0) { throw 'Could not list registered Python runtimes.' }
-$pythonCandidates = @($pythonListing | ForEach-Object {
-    if ($_ -match '^\s*-(?:V:)?3\.11(?:-\d+)?\s+\*?\s*(?<Runtime>[A-Za-z]:\\.+\\python\.exe)\s*$') {
-        $Matches.Runtime.Trim()
-    }
-})
-$programFilesRoot = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
-$trustedCandidates = @($pythonCandidates | Where-Object {
-    [IO.Path]::GetFullPath($_).StartsWith($programFilesRoot, [StringComparison]::OrdinalIgnoreCase)
-})
-if ($trustedCandidates.Count -ne 1) {
-    throw 'Exactly one registered Python 3.11 beneath protected Program Files is required.'
-}
-$basePython = $trustedCandidates[0]
-Assert-NotReparseTree $basePython
-Assert-ProtectedTree $basePython $env:ProgramFiles
-
-$node = (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source
-$npm = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop).Source
-foreach ($tool in @($node, $npm)) {
-    Assert-NotReparseTree $tool
-    Assert-ProtectedTree $tool $env:ProgramFiles
-}
+# Never invoke py -3.13 before validating the chosen executable.
+# A per-user Python 3.13 or npm.cmd does not disqualify a protected system pair.
+. (Join-Path $PSScriptRoot 'runtime-selection.ps1')
+$basePython = Select-RavenXPython313 -Launcher $launcher -ProgramFiles $env:ProgramFiles -ProtectedTreeCommand 'Assert-ProtectedTree'
+$nodeCommands = @(Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue)
+if ($nodeCommands.Count -eq 0) { throw 'Node.js was not found.' }
+$toolchain = Select-RavenXNodeToolchain -NodeExecutables @($nodeCommands | ForEach-Object { $_.Source }) `
+    -ProgramFiles $env:ProgramFiles -ProtectedTreeCommand 'Assert-ProtectedTree'
+$node = $toolchain.Node
+$npm = $toolchain.Npm
 
 Protect-CodeDirectory $installParent
 Protect-CodeDirectory $installRoot
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'backend') -Destination (Join-Path $installRoot 'backend') -Recurse
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'config') -Destination (Join-Path $installRoot 'config') -Recurse
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'requirements-server.txt') -Destination $installRoot
+if ($PSBoundParameters.ContainsKey('ServerName')) {
+    Copy-Item -LiteralPath $startServerSource -Destination (Join-Path $installRoot 'start-server.ps1')
+    $serverAddressConfig = Join-Path $installRoot 'server-address.json'
+    Write-ServerAddressConfig $serverAddressConfig $ServerName $Port $interfaceAlias
+    Assert-NotReparseTree $serverAddressConfig
+    Assert-ProtectedTree $serverAddressConfig $env:ProgramFiles
+}
 $frontendRoot = Join-Path $installRoot 'frontend'
 New-Item -ItemType Directory -Path $frontendRoot | Out-Null
 foreach ($name in @('package.json', 'package-lock.json', 'index.html', 'tsconfig.json', 'vite.config.ts')) {
@@ -193,7 +244,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'dist\index.html') -Pa
 
 Push-Location $installRoot
 try {
-    & $serverPython -E -s -m backend.cli tls-init --data-dir $dataRoot --host $ServerHost
+    $tlsHosts = @('--host', $ServerHost)
+    if ($PSBoundParameters.ContainsKey('ServerName')) { $tlsHosts += @('--host', $ServerName) }
+    & $serverPython -E -s -m backend.cli tls-init --data-dir $dataRoot @tlsHosts
     if ($LASTEXITCODE -ne 0) { throw 'TLS setup failed. Existing material was preserved.' }
     & $serverPython -E -s -m backend.cli bootstrap --data-dir $dataRoot --email $AdminEmail `
         --organization $Organization
@@ -210,21 +263,39 @@ if ($OpenPrivateFirewall) {
     if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) {
         throw 'A RAVEN-X firewall rule already exists; inspect it before adding another.'
     }
-    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Enabled True `
-        -Profile Private -Protocol TCP -LocalAddress $ServerHost -LocalPort $Port `
-        -RemoteAddress LocalSubnet | Out-Null
+    $firewall = @{
+        DisplayName = $ruleName; Direction = 'Inbound'; Action = 'Allow'; Enabled = 'True'
+        Profile = 'Private'; Protocol = 'TCP'; LocalPort = $Port; RemoteAddress = 'LocalSubnet'
+    }
+    if ($PSBoundParameters.ContainsKey('ServerName')) {
+        $firewall.InterfaceAlias = $interfaceAlias
+    } else {
+        $firewall.LocalAddress = $ServerHost
+    }
+    New-NetFirewallRule @firewall | Out-Null
     Write-Host 'Private-profile LocalSubnet firewall rule installed.'
 } else {
     Write-Host 'No firewall rule installed. Use -OpenPrivateFirewall after confirming the LAN interface.'
 }
 
 Write-Host "Setup complete. Run elevated from $installRoot with:"
-Write-Host "  & '$serverPython' -E -s -m backend.cli serve --data-dir '$dataRoot' --host $ServerHost --port $Port"
+if ($PSBoundParameters.ContainsKey('ServerName')) {
+    $startServer = Join-Path $installRoot 'start-server.ps1'
+    Write-Host "  & '$startServer'"
+} else {
+    Write-Host "  & '$serverPython' -E -s -m backend.cli serve --data-dir '$dataRoot' --host $ServerHost --port $Port"
+}
 if ($Start) {
     Push-Location $installRoot
     try {
-        $env:RAVENX_LOCAL_AI_ENABLED = 'false'
-        & $serverPython -E -s -m backend.cli serve --data-dir $dataRoot --host $ServerHost --port $Port
+        if ($null -eq [Environment]::GetEnvironmentVariable('RAVENX_LOCAL_AI_ENABLED', 'Process')) {
+            $env:RAVENX_LOCAL_AI_ENABLED = 'false'
+        }
+        if ($PSBoundParameters.ContainsKey('ServerName')) {
+            & $startServer
+        } else {
+            & $serverPython -E -s -m backend.cli serve --data-dir $dataRoot --host $ServerHost --port $Port
+        }
     } finally {
         Pop-Location
     }

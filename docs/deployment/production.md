@@ -1,6 +1,6 @@
 # Production deployment
 
-Supported runtime is Python 3.11.x. Recommended topology is HTTPS reverse
+Supported runtime is Python 3.13.x. Recommended topology is HTTPS reverse
 proxy → Raven-X API → shared database, with exactly one instance configured
 with `RAVENX_ASSESSMENT_SCHEDULER_ENABLED=true`; other API instances disable
 the scheduler. Agents make outbound HTTPS requests only and require normal

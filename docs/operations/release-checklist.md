@@ -1,6 +1,6 @@
 # Release checklist
 
-- Python 3.11 dependency installation verified
+- Python 3.13 dependency installation verified
 - Full `pytest` suite and backend compile pass
 - Production CORS/proxy/TLS settings reviewed
 - Backup completed and restore procedure available

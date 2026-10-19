@@ -1,5 +1,5 @@
 # Reproducible Raven-X control-plane development/test environment.
-# Supported interpreter: Python >=3.11,<3.14.  Python 3.14 is not supported
+# Supported interpreter: Python 3.13.  Python 3.14 is not supported
 # until all optional native and AI dependencies have been validated there.
 fastapi==0.118.0
 uvicorn==0.38.0

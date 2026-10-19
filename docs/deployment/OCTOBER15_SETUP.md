@@ -1,5 +1,9 @@
 # October 15 Windows pilot setup
 
+For a short two-laptop demonstration without router DNS changes, use the
+[IP-variable quick demo](QUICK_DEMO_IP.md). This document describes the
+optional stable-hostname setup for longer-lived enrollment.
+
 Status: prepared for the HP Omen control-plane machine. The Dell Vostro and HP
 notebook have **not** been installed or verified from this workspace. Use this
 runbook only with reviewed source on those physical machines. No installer is
@@ -8,15 +12,24 @@ run by reading this document.
 ## Topology and prerequisites
 
 - HP Omen: one HTTPS server, SQLite database, portal build, and optional local
-  OpenAI-compatible model on loopback. Use one private IPv4 address assigned to
-  a Windows **Private** network interface; do not bind to `0.0.0.0`.
+  OpenAI-compatible model on loopback. Choose a stable LAN DNS name for the
+  portal and agents. Its A record must resolve to one private IPv4 address
+  assigned to a Windows **Private** network interface; do not bind to `0.0.0.0`.
 - Dell Vostro and HP notebook: outbound HTTPS Windows agents. They need no
   inbound firewall rule. All three machines need synchronized clocks and LAN
   reachability to the chosen HP Omen address and port.
-- Install **system-wide** Python 3.11 with `py.exe` in `%WINDIR%` and its base
-  interpreter under protected `%ProgramFiles%`. Install Node.js/npm under
-  protected `%ProgramFiles%` on the server. The scripts refuse user-writable
-  interpreters and existing install directories.
+- Install **system-wide** Python 3.13 with `py.exe` in `%WINDIR%` and exactly one
+  base interpreter under protected `%ProgramFiles%`. A per-user 3.13 may stay
+  registered; the installer ignores it and does not fall back to it. Zero or
+  multiple Program Files 3.13 registrations fail closed. On the server, Node.js
+  and the `npm.cmd` beside that `node.exe` must also sit under protected
+  `%ProgramFiles%`. A user-global `npm.cmd` is ignored. The scripts refuse
+  user-writable interpreters, reparse points, and existing install directories.
+- For this pilot, use the official 64-bit Python 3.13.16 Windows installer and
+  select **Install for all users** with a protected target such as
+  `C:\Program Files\RavenXRuntime\Python313`. The existing per-user Python 3.11
+  and Store Python 3.13 registrations may remain. Verify `py -0p` lists the
+  new Program Files Python 3.13 before running either RAVEN-X installer.
 - Run the scripts from an elevated PowerShell window using reviewed source.
   Installers refuse to overwrite an existing installation or database. The
   Python requirements and frontend package lock are pinned; the server script
@@ -26,12 +39,20 @@ run by reading this document.
 
 ## 1. Prepare the HP Omen server
 
-From the repository root, substitute the Omen's actual private IPv4 address
-and the intended administrator/organization names:
+First create a LAN DNS A record on the router for a name you control, pointing
+to the Omen's current private IPv4 address. The hostname, HTTPS port, and CA
+will remain fixed for enrolled agents; the A record may be changed when the
+Omen's IP changes. From the repository root, set these values and substitute
+the intended administrator/organization names:
 
 ```powershell
+$ServerName = 'ravenx.home.arpa'  # Example; use the name configured on your LAN DNS
+$ServerIp = '192.168.1.121'       # Current address assigned to the Omen
+$ServerUrl = "https://${ServerName}:8443"
+Resolve-DnsName -Name $ServerName -Type A -DnsOnly -NoHostsFile
 .\scripts\install-server.ps1 `
-  -ServerHost 192.168.1.50 `
+  -ServerHost $ServerIp `
+  -ServerName $ServerName `
   -AdminEmail admin@example.test `
   -Organization 'Pilot Organization' `
   -Port 8443 `
@@ -39,13 +60,15 @@ and the intended administrator/organization names:
 ```
 
 The script prompts twice for the first administrator password; it is never a
-command argument. It creates a local CA and server certificate covering the
-chosen IP address, bootstraps one organization, and prints the **public** CA
+command argument. It verifies that the DNS name resolves to the selected local
+IP, creates a local CA and server certificate covering both the DNS name and
+initial IP, bootstraps one organization, and prints the **public** CA
 fingerprint. It leaves the server stopped unless `-Start` is supplied. The
 optional firewall switch installs one inbound rule for TCP 8443 on the Private
-profile, bound to the chosen local IP and `LocalSubnet`. Without that switch,
-inspect the interface and add the same narrow rule manually before remote
-enrollment. Do not add a Public-profile or any-address rule.
+profile, scoped to the selected interface and `LocalSubnet`. That rule follows
+an IP change on the same interface. Without that switch, inspect the interface
+and add the same narrow rule manually before remote enrollment. Do not add a
+Public-profile or every-interface rule.
 
 The installed code is `%ProgramFiles%\RAVEN-X\Server`. Server database and TLS
 material are under `%ProgramData%\RAVEN-X\server`. The server's `ca-key.pem`
@@ -59,14 +82,14 @@ inspect/backup it. There is no automatic reset or overwrite. The local
 `backend.cli bootstrap` command refuses a database that already contains
 users; it cannot turn an existing account into an administrator.
 
-To start the server in the foreground from an elevated PowerShell window:
+To start the server in the foreground from an elevated PowerShell window, use
+the copy of the launch script in the protected installed directory. It resolves
+the installed DNS name to the Omen's **current** IP at each start. The protected
+installation config fixes the name, port, and interface, and the script refuses
+an ambiguous, nonlocal, non-Private, or wrong-interface address:
 
 ```powershell
-Set-Location "$env:ProgramFiles\RAVEN-X\Server"
-$env:RAVENX_LOCAL_AI_ENABLED = 'false'
-& '.\venv\Scripts\python.exe' -E -s -m backend.cli serve `
-  --data-dir "$env:ProgramData\RAVEN-X\server" `
-  --host 192.168.1.50 --port 8443
+& "$env:ProgramFiles\RAVEN-X\Server\start-server.ps1"
 ```
 
 The CLI forces production settings, one worker, frontend serving, and legacy
@@ -76,13 +99,16 @@ window; there is no server Windows service installer in this pilot.
 
 ## 2. Verify HTTPS and distribute the public CA
 
-On the Omen, calculate the public certificate fingerprint independently:
+On the Omen, calculate the public certificate fingerprint independently and
+verify HTTPS through the DNS name:
 
 ```powershell
+$ServerName = 'ravenx.home.arpa'
+$ServerUrl = "https://${ServerName}:8443"
 $ca = "$env:ProgramData\RAVEN-X\server\tls\ca.pem"
 (Get-FileHash -Algorithm SHA256 -LiteralPath $ca).Hash
-curl.exe --cacert $ca https://192.168.1.50:8443/health
-curl.exe --cacert $ca https://192.168.1.50:8443/ready
+curl.exe --cacert $ca "$ServerUrl/health"
+curl.exe --cacert $ca "$ServerUrl/ready"
 ```
 
 Copy only `ca.pem` to each notebook using a trusted channel. Compare its
@@ -95,7 +121,9 @@ after confirming the fingerprint. Do not distribute either private key.
 
 ## 3. Enroll each notebook
 
-Log in to `https://192.168.1.50:8443` as the bootstrapped administrator.
+Log in to `$ServerUrl` as the bootstrapped administrator, using the same fixed
+hostname on each laptop. Confirm that the name resolves to the Omen from the
+physical laptop before attempting enrollment.
 Select the pilot organization, open **Enrollment**, and issue a separate
 single-use token for each machine. Record the enrollment ID and transfer the
 one-time token through a trusted channel directly to the operator at the
@@ -107,8 +135,11 @@ elevated PowerShell window:
 
 ```powershell
 $verifiedCaSha256 = Read-Host 'SHA-256 fingerprint independently confirmed on the HP Omen'
+$ServerName = 'ravenx.home.arpa'
+$ServerUrl = "https://${ServerName}:8443"
+Resolve-DnsName -Name $ServerName -Type A -DnsOnly -NoHostsFile
 .\scripts\install-agent.ps1 `
-  -ServerUrl https://192.168.1.50:8443 `
+  -ServerUrl $ServerUrl `
   -EnrollmentId 65e38624-4cfc-4f43-9897-4e1eb9eaa140 `
   -CaCertPath C:\TrustedTransfer\ca.pem `
   -CaCertSha256 $verifiedCaSha256
@@ -122,14 +153,23 @@ foreground pass after enrollment, from the installed directory run elevated:
 
 ```powershell
 Set-Location "$env:ProgramFiles\RavenX\Agent"
+$ServerName = 'ravenx.home.arpa'
+$ServerUrl = "https://${ServerName}:8443"
 & '.\venv\Scripts\python.exe' -E -s -m backend.agent run `
-  --server https://192.168.1.50:8443 `
+  --server $ServerUrl `
   --ca-cert "$env:ProgramData\RavenX\agent\server-ca.pem" --once
 ```
 
 The fingerprint must be the 64-character SHA-256 value obtained independently
 from the Omen, not a fresh hash of an untrusted transfer file. Agent preparation
 checks the exact bytes it imports against that value and refuses a mismatch.
+After enrollment, changing the laptop's saved URL by editing a PowerShell
+variable is not supported. To move the Omen to a new IP, update the LAN DNS A
+record for the **same hostname**, restart the server with the protected launch
+script, and verify `/health` from both machines. The new IP must stay on the
+same Private interface used at installation; another interface requires a
+reviewed firewall and installation-config update. Preserve the CA and server
+private keys. Changing the hostname or port needs a separate reviewed migration.
 
 The one-pass command can exit silently. Check the endpoint heartbeat and work
 state in the portal; a zero exit code alone does not demonstrate an assessment.

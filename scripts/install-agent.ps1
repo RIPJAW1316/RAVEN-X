@@ -4,7 +4,7 @@
 Install and enroll the RAVEN-X Windows endpoint agent for a pilot machine.
 
 .DESCRIPTION
-Run from an elevated PowerShell window with Python 3.11 available through
+Run from an elevated PowerShell window with Python 3.13 available through
 the py launcher. The bootstrap token is requested by Python's hidden prompt;
 it is never supplied in a command argument, task definition, or file.
 
@@ -145,29 +145,15 @@ Assert-NotReparseTree $env:ProgramFiles
 Assert-NoUntrustedWrite $env:ProgramFiles
 $launcher = Join-Path $env:WINDIR 'py.exe'
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
-    throw 'Install the system-wide Python 3.11 launcher before deploying the SYSTEM agent.'
+    throw 'Install the system-wide Python 3.13 launcher before deploying the SYSTEM agent.'
 }
 Assert-NotReparseTree $launcher
 Assert-NoUntrustedWrite $launcher
 # Listing registered runtimes does not execute a selected interpreter.
-# Never invoke py -3.11 before validating the chosen executable.
-$pythonListing = @(& $launcher -0p)
-if ($LASTEXITCODE -ne 0) { throw 'Could not list registered Python runtimes.' }
-$pythonCandidates = @($pythonListing | ForEach-Object {
-    if ($_ -match '^\s*-(?:V:)?3\.11(?:-\d+)?\s+\*?\s*(?<Runtime>[A-Za-z]:\\.+\\python\.exe)\s*$') {
-        $Matches.Runtime.Trim()
-    }
-})
-$programFilesRoot = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
-$trustedCandidates = @($pythonCandidates | Where-Object {
-    [IO.Path]::GetFullPath($_).StartsWith($programFilesRoot, [StringComparison]::OrdinalIgnoreCase)
-})
-if ($trustedCandidates.Count -ne 1) {
-    throw 'Exactly one registered Python 3.11 beneath protected Program Files is required.'
-}
-$basePython = $trustedCandidates[0]
-Assert-NotReparseTree $basePython
-Assert-NoUntrustedWriteTree $basePython $env:ProgramFiles
+# Never invoke py -3.13 before validating the chosen executable.
+# A per-user Python 3.13 does not disqualify one protected system interpreter.
+. (Join-Path $PSScriptRoot 'runtime-selection.ps1')
+$basePython = Select-RavenXPython313 -Launcher $launcher -ProgramFiles $env:ProgramFiles -ProtectedTreeCommand 'Assert-NoUntrustedWriteTree'
 Protect-CodeDirectory $installParent
 Protect-CodeDirectory $installRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'backend') -Destination (Join-Path $installRoot 'backend') -Recurse
@@ -188,7 +174,11 @@ try {
     $action = New-ScheduledTaskAction -Execute $agentPython -Argument $arguments -WorkingDirectory $installRoot
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal `
+    # The agent must stay available when a laptop is running on battery.
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable `
+        -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
         -Description 'RAVEN-X outbound Windows endpoint agent' | Out-Null
     if (-not $NoStart) { Start-ScheduledTask -TaskName $taskName }
 } finally {

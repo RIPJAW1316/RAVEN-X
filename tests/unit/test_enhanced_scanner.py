@@ -31,8 +31,10 @@ def test_registry_methods_exist_and_are_callable():
 
 
 def test_targeted_windows_update_scan_is_safe_with_mocked_platform(monkeypatch):
+    from datetime import datetime, timezone
+
     scanner = EnhancedScanner()
-    today = "2026-08-18T00:00:00"
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
 
     monkeypatch.setattr(
         enhanced_scanner_module.subprocess,
