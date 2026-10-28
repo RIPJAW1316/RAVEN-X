@@ -7,6 +7,8 @@ authentication framework, or persistence dependencies.
 from .models import (
     CredentialId,
     CredentialKind,
+    CredentialRenewal,
+    CredentialRevocationKind,
     CredentialStatus,
     EndpointCredential,
     EnrollmentAuthorization,
@@ -18,6 +20,8 @@ from .models import (
 __all__ = [
     "CredentialId",
     "CredentialKind",
+    "CredentialRenewal",
+    "CredentialRevocationKind",
     "CredentialStatus",
     "EndpointCredential",
     "EnrollmentAuthorization",

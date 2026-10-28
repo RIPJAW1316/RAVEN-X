@@ -95,6 +95,10 @@ class AgentMessageType(str, Enum):
     STATUS = "agent.status"
     ENROLLMENT_REQUEST = "enrollment.request"
     ENROLLMENT_RESPONSE = "enrollment.response"
+    CREDENTIAL_RENEWAL_REQUEST = "credential.renewal.request"
+    CREDENTIAL_RENEWAL_RESPONSE = "credential.renewal.response"
+    CREDENTIAL_RENEWAL_CONFIRM = "credential.renewal.confirm"
+    CREDENTIAL_RENEWAL_CONFIRMED = "credential.renewal.confirmed"
     ASSESSMENT_DISPATCH = "assessment.dispatch"
     ASSESSMENT_ACK = "assessment.ack"
     ASSESSMENT_PROGRESS = "assessment.progress"
@@ -250,6 +254,203 @@ class EnrollmentResponsePayload(ProtocolPayload):
         return cls(data["endpoint_id"], data["credential_id"], data["credential_secret"],
                    ProtocolVersion.parse(data["protocol_version"]), data.get("organization_id"),
                    data.get("status"), data.get("credential_expires_at"))
+
+
+def _bounded_nonce(value) -> None:
+    if not isinstance(value, str) or not value.strip() or len(value) > 128 or any(ch.isspace() for ch in value):
+        raise ValueError("nonce is required and must be bounded without whitespace")
+
+
+def _uuid_text(value) -> str:
+    return str(UUID(str(value)))
+
+
+@dataclass(frozen=True)
+class CredentialRenewalRequestPayload(ProtocolPayload):
+    """Agent-prepared successor proposal, authenticated by the predecessor bearer.
+
+    ``successor_credential_secret`` was generated and durably stored by the
+    agent before sending; it is the only secret in the renewal protocol and is
+    redacted from every representation except the explicit wire form.
+    """
+
+    message_id: MessageId
+    timestamp: datetime
+    nonce: str
+    credential_id: str
+    successor_credential_id: str
+    successor_credential_secret: str = field(repr=False)
+    protocol_version: ProtocolVersion = field(default_factory=ProtocolVersion.current)
+    endpoint_id: Optional[EndpointId] = None
+    organization_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.message_id, MessageId):
+            object.__setattr__(self, "message_id", MessageId(self.message_id))
+        object.__setattr__(self, "timestamp", _timestamp(self.timestamp, "timestamp"))
+        _bounded_nonce(self.nonce)
+        object.__setattr__(self, "credential_id", _uuid_text(self.credential_id))
+        object.__setattr__(self, "successor_credential_id", _uuid_text(self.successor_credential_id))
+        if (not isinstance(self.successor_credential_secret, str) or not self.successor_credential_secret
+                or len(self.successor_credential_secret) > 128):
+            raise ValueError("successor credential secret is required")
+        if isinstance(self.protocol_version, str):
+            object.__setattr__(self, "protocol_version", ProtocolVersion.parse(self.protocol_version))
+        if self.endpoint_id is not None and not isinstance(self.endpoint_id, EndpointId):
+            object.__setattr__(self, "endpoint_id", EndpointId(str(self.endpoint_id)))
+        if self.organization_id is not None:
+            object.__setattr__(self, "organization_id", _uuid_text(self.organization_id))
+
+    def __repr__(self) -> str:
+        return (f"CredentialRenewalRequestPayload(credential_id={self.credential_id!r}, "
+                f"successor_credential_id={self.successor_credential_id!r}, successor_credential_secret=<redacted>)")
+
+    def to_dict(self, *, include_secret: bool = False) -> Dict[str, Any]:
+        result = {
+            "message_id": str(self.message_id), "timestamp": self.timestamp.isoformat(), "nonce": self.nonce,
+            "protocol_version": str(self.protocol_version), "credential_id": self.credential_id,
+            "successor_credential_id": self.successor_credential_id,
+            "successor_credential_secret": self.successor_credential_secret if include_secret else "<redacted>",
+        }
+        if self.endpoint_id is not None:
+            result["endpoint_id"] = str(self.endpoint_id)
+        if self.organization_id is not None:
+            result["organization_id"] = self.organization_id
+        return result
+
+    def to_wire_dict(self) -> Dict[str, Any]:
+        return self.to_dict(include_secret=True)
+
+    @classmethod
+    def from_wire_dict(cls, data: Mapping[str, Any]) -> "CredentialRenewalRequestPayload":
+        return cls(
+            message_id=MessageId(data["message_id"]),
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            nonce=data["nonce"],
+            credential_id=data["credential_id"],
+            successor_credential_id=data["successor_credential_id"],
+            successor_credential_secret=data["successor_credential_secret"],
+            protocol_version=ProtocolVersion.parse(data["protocol_version"]),
+            endpoint_id=EndpointId(data["endpoint_id"]) if data.get("endpoint_id") is not None else None,
+            organization_id=data.get("organization_id"),
+        )
+
+
+@dataclass(frozen=True)
+class CredentialRenewalResponsePayload(ProtocolPayload):
+    """Committed lineage receipt. It never contains credential material."""
+
+    endpoint_id: EndpointId
+    organization_id: str
+    credential_id: str
+    replaces_credential_id: str
+    credential_expires_at: str
+    predecessor_valid_until: str
+    protocol_version: ProtocolVersion = field(default_factory=ProtocolVersion.current)
+    status: str = "active"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.endpoint_id, EndpointId):
+            object.__setattr__(self, "endpoint_id", EndpointId(str(self.endpoint_id)))
+        object.__setattr__(self, "organization_id", _uuid_text(self.organization_id))
+        object.__setattr__(self, "credential_id", _uuid_text(self.credential_id))
+        object.__setattr__(self, "replaces_credential_id", _uuid_text(self.replaces_credential_id))
+        for name in ("credential_expires_at", "predecessor_valid_until"):
+            _timestamp(datetime.fromisoformat(getattr(self, name)), name)
+        if isinstance(self.protocol_version, str):
+            object.__setattr__(self, "protocol_version", ProtocolVersion.parse(self.protocol_version))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "endpoint_id": str(self.endpoint_id), "organization_id": self.organization_id,
+            "credential_id": self.credential_id, "replaces_credential_id": self.replaces_credential_id,
+            "credential_expires_at": self.credential_expires_at,
+            "predecessor_valid_until": self.predecessor_valid_until,
+            "protocol_version": str(self.protocol_version), "status": self.status,
+        }
+
+    @classmethod
+    def from_wire_dict(cls, data: Mapping[str, Any]) -> "CredentialRenewalResponsePayload":
+        return cls(
+            endpoint_id=EndpointId(data["endpoint_id"]),
+            organization_id=data["organization_id"],
+            credential_id=data["credential_id"],
+            replaces_credential_id=data["replaces_credential_id"],
+            credential_expires_at=data["credential_expires_at"],
+            predecessor_valid_until=data["predecessor_valid_until"],
+            protocol_version=ProtocolVersion.parse(data["protocol_version"]),
+            status=data.get("status", "active"),
+        )
+
+
+@dataclass(frozen=True)
+class CredentialRenewalConfirmPayload(ProtocolPayload):
+    """Proof of successor possession, authenticated by the successor bearer."""
+
+    message_id: MessageId
+    timestamp: datetime
+    nonce: str
+    credential_id: str
+    protocol_version: ProtocolVersion = field(default_factory=ProtocolVersion.current)
+    replaces_credential_id: Optional[str] = None
+    endpoint_id: Optional[EndpointId] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.message_id, MessageId):
+            object.__setattr__(self, "message_id", MessageId(self.message_id))
+        object.__setattr__(self, "timestamp", _timestamp(self.timestamp, "timestamp"))
+        _bounded_nonce(self.nonce)
+        object.__setattr__(self, "credential_id", _uuid_text(self.credential_id))
+        if isinstance(self.protocol_version, str):
+            object.__setattr__(self, "protocol_version", ProtocolVersion.parse(self.protocol_version))
+        if self.replaces_credential_id is not None:
+            object.__setattr__(self, "replaces_credential_id", _uuid_text(self.replaces_credential_id))
+        if self.endpoint_id is not None and not isinstance(self.endpoint_id, EndpointId):
+            object.__setattr__(self, "endpoint_id", EndpointId(str(self.endpoint_id)))
+
+    @classmethod
+    def from_wire_dict(cls, data: Mapping[str, Any]) -> "CredentialRenewalConfirmPayload":
+        return cls(
+            message_id=MessageId(data["message_id"]),
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            nonce=data["nonce"],
+            credential_id=data["credential_id"],
+            protocol_version=ProtocolVersion.parse(data["protocol_version"]),
+            replaces_credential_id=data.get("replaces_credential_id"),
+            endpoint_id=EndpointId(data["endpoint_id"]) if data.get("endpoint_id") is not None else None,
+        )
+
+
+@dataclass(frozen=True)
+class CredentialRenewalConfirmationPayload(ProtocolPayload):
+    """Confirmation receipt; lets an agent whose renewal response was lost learn the successor lifetime."""
+
+    endpoint_id: EndpointId
+    organization_id: str
+    credential_id: str
+    credential_expires_at: str
+    replaces_credential_id: Optional[str] = None
+    confirmed: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.endpoint_id, EndpointId):
+            object.__setattr__(self, "endpoint_id", EndpointId(str(self.endpoint_id)))
+        object.__setattr__(self, "organization_id", _uuid_text(self.organization_id))
+        object.__setattr__(self, "credential_id", _uuid_text(self.credential_id))
+        if self.replaces_credential_id is not None:
+            object.__setattr__(self, "replaces_credential_id", _uuid_text(self.replaces_credential_id))
+        _timestamp(datetime.fromisoformat(self.credential_expires_at), "credential_expires_at")
+
+    @classmethod
+    def from_wire_dict(cls, data: Mapping[str, Any]) -> "CredentialRenewalConfirmationPayload":
+        return cls(
+            endpoint_id=EndpointId(data["endpoint_id"]),
+            organization_id=data["organization_id"],
+            credential_id=data["credential_id"],
+            credential_expires_at=data["credential_expires_at"],
+            replaces_credential_id=data.get("replaces_credential_id"),
+            confirmed=data.get("confirmed") is True,
+        )
 
 
 @dataclass(frozen=True)
@@ -461,10 +662,23 @@ class InMemoryReplayGuard:
 class ProtocolValidationPolicy:
     max_clock_skew: timedelta = timedelta(minutes=5)
     max_payload_bytes: int = 1024 * 1024
+    replay_safety_margin: timedelta = timedelta(seconds=60)
 
     def __post_init__(self) -> None:
         if self.max_clock_skew < timedelta(0) or self.max_payload_bytes <= 0:
             raise ValueError("invalid protocol validation policy")
+        if self.replay_safety_margin < timedelta(0):
+            raise ValueError("replay safety margin cannot be negative")
+
+    @property
+    def replay_retention(self) -> timedelta:
+        """Keep a claim until a future-dated accepted message would itself be stale.
+
+        A timestamp of now + skew is accepted. Replaying it at that timestamp
+        plus another skew must still hit the claim, so retention is 2×skew
+        plus a safety margin.
+        """
+        return (self.max_clock_skew * 2) + self.replay_safety_margin
 
 
 def validate_envelope(envelope: AgentMessageEnvelope, *, now: Optional[datetime] = None,
@@ -490,10 +704,12 @@ def validate_envelope(envelope: AgentMessageEnvelope, *, now: Optional[datetime]
 def message_direction(message_type: AgentMessageType) -> MessageDirection:
     message_type = AgentMessageType(message_type)
     if message_type in (AgentMessageType.HEARTBEAT, AgentMessageType.CAPABILITIES, AgentMessageType.STATUS,
-                        AgentMessageType.ENROLLMENT_REQUEST, AgentMessageType.ASSESSMENT_PROGRESS,
+                        AgentMessageType.ENROLLMENT_REQUEST, AgentMessageType.CREDENTIAL_RENEWAL_REQUEST,
+                        AgentMessageType.CREDENTIAL_RENEWAL_CONFIRM, AgentMessageType.ASSESSMENT_PROGRESS,
                         AgentMessageType.ASSESSMENT_ACK, AgentMessageType.ASSESSMENT_RESULT, AgentMessageType.ERROR):
         return MessageDirection.AGENT_TO_CONTROL
-    if message_type in (AgentMessageType.ENROLLMENT_RESPONSE, AgentMessageType.ASSESSMENT_DISPATCH):
+    if message_type in (AgentMessageType.ENROLLMENT_RESPONSE, AgentMessageType.CREDENTIAL_RENEWAL_RESPONSE,
+                        AgentMessageType.CREDENTIAL_RENEWAL_CONFIRMED, AgentMessageType.ASSESSMENT_DISPATCH):
         return MessageDirection.CONTROL_TO_AGENT
     return MessageDirection.BIDIRECTIONAL
 
@@ -520,7 +736,12 @@ def default_message_registry() -> MessageRegistry:
     for message_type, payload_type in (
         (AgentMessageType.HEARTBEAT, AgentHeartbeat), (AgentMessageType.CAPABILITIES, AgentCapabilityReport),
         (AgentMessageType.STATUS, AgentStatusReport), (AgentMessageType.ENROLLMENT_REQUEST, EnrollmentRequestPayload),
-        (AgentMessageType.ENROLLMENT_RESPONSE, EnrollmentResponsePayload), (AgentMessageType.ASSESSMENT_DISPATCH, AssessmentDispatch),
+        (AgentMessageType.ENROLLMENT_RESPONSE, EnrollmentResponsePayload),
+        (AgentMessageType.CREDENTIAL_RENEWAL_REQUEST, CredentialRenewalRequestPayload),
+        (AgentMessageType.CREDENTIAL_RENEWAL_RESPONSE, CredentialRenewalResponsePayload),
+        (AgentMessageType.CREDENTIAL_RENEWAL_CONFIRM, CredentialRenewalConfirmPayload),
+        (AgentMessageType.CREDENTIAL_RENEWAL_CONFIRMED, CredentialRenewalConfirmationPayload),
+        (AgentMessageType.ASSESSMENT_DISPATCH, AssessmentDispatch),
         (AgentMessageType.ASSESSMENT_ACK, AssessmentAcknowledgment),
         (AgentMessageType.ASSESSMENT_PROGRESS, AssessmentProgress), (AgentMessageType.ASSESSMENT_RESULT, AssessmentResultPayload),
         (AgentMessageType.ERROR, ProtocolError),

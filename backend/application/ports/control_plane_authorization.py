@@ -25,7 +25,7 @@ class ConservativeControlPlaneAuthorizer:
     _system_actions = frozenset({
         AuthorizationAction.ENDPOINT_CREATE, AuthorizationAction.ENDPOINT_READ, AuthorizationAction.ENDPOINT_UPDATE, AuthorizationAction.ENDPOINT_REVOKE,
         AuthorizationAction.ENROLLMENT_CREATE, AuthorizationAction.ENROLLMENT_REVOKE,
-        AuthorizationAction.CREDENTIAL_ROTATE, AuthorizationAction.CREDENTIAL_REVOKE,
+        AuthorizationAction.CREDENTIAL_ROTATE, AuthorizationAction.CREDENTIAL_RENEW, AuthorizationAction.CREDENTIAL_REVOKE,
         AuthorizationAction.ASSESSMENT_CREATE, AuthorizationAction.ASSESSMENT_READ,
         AuthorizationAction.ASSESSMENT_CANCEL,
         AuthorizationAction.ASSESSMENT_SCHEDULE_CREATE, AuthorizationAction.ASSESSMENT_SCHEDULE_READ,
@@ -52,6 +52,7 @@ class ConservativeControlPlaneAuthorizer:
         AuthorizationAction.AGENT_HEARTBEAT_SUBMIT, AuthorizationAction.AGENT_CAPABILITIES_SUBMIT,
         AuthorizationAction.AGENT_STATUS_SUBMIT, AuthorizationAction.ASSESSMENT_ACK_SUBMIT,
         AuthorizationAction.ASSESSMENT_PROGRESS_SUBMIT, AuthorizationAction.ASSESSMENT_RESULT_SUBMIT,
+        AuthorizationAction.CREDENTIAL_RENEW,
     })
 
     def authorize(self, request: AuthorizationRequest) -> AuthorizationDecision:

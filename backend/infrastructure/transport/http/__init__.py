@@ -2,10 +2,14 @@ from importlib import import_module
 
 
 _EXPORTS = {
+    "EnrollmentGrant": (".client", "EnrollmentGrant"),
+    "HttpAgentEnrollmentClient": (".client", "HttpAgentEnrollmentClient"),
     "HttpAgentTransport": (".client", "HttpAgentTransport"),
     "HttpTransportConfig": (".client", "HttpTransportConfig"),
     "HttpTransportError": (".client", "HttpTransportError"),
     "LeasedHttpWork": (".client", "LeasedHttpWork"),
+    "RenewalConfirmation": (".client", "RenewalConfirmation"),
+    "RenewalReceipt": (".client", "RenewalReceipt"),
     "HttpControlPlaneTransport": (".outbox", "HttpControlPlaneTransport"),
     "PendingWorkQueue": (".outbox", "PendingWorkQueue"),
     "create_agent_http_app": (".server", "create_agent_http_app"),
@@ -23,10 +27,14 @@ def __getattr__(name):
     return value
 
 __all__ = [
+    "EnrollmentGrant",
+    "HttpAgentEnrollmentClient",
     "HttpAgentTransport",
     "HttpTransportConfig",
     "HttpTransportError",
     "LeasedHttpWork",
+    "RenewalConfirmation",
+    "RenewalReceipt",
     "HttpControlPlaneTransport",
     "PendingWorkQueue",
     "create_agent_http_app",

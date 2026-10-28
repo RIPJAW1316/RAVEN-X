@@ -29,16 +29,36 @@ def resolve_config_path(config_path=None) -> Path:
 
 
 def _configure_sqlite_connection(dbapi_conn, *, memory: bool) -> None:
+    """Apply durability pragmas on every SQLite connection.
+
+    ``synchronous=FULL`` (integer 2) makes SQLite wait until the WAL frames for
+    a commit are flushed to the operating system. That is stronger than
+    ``NORMAL``, which may defer that flush. It does not, by itself, prove that
+    a disk write cache or a sudden power loss cannot drop the commit. Hardware
+    power-loss safety remains a physical qualification gate.
+
+    Each commit pays for that flush, so enrollment, revocation, and assessment
+    writes have higher latency than they did under ``NORMAL``: about one
+    storage flush per transaction instead of a deferred checkpoint.
+    """
     cursor = dbapi_conn.cursor()
     try:
         cursor.execute("PRAGMA busy_timeout=30000")
         if not memory:
             cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA synchronous=FULL")
         cursor.execute("PRAGMA cache_size=-64000")
         cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA synchronous")
+        if int(cursor.fetchone()[0]) != 2:
+            raise RuntimeError("SQLite synchronous mode is not FULL")
+        if not memory:
+            cursor.execute("PRAGMA journal_mode")
+            if str(cursor.fetchone()[0]).lower() != "wal":
+                raise RuntimeError("SQLite journal mode is not WAL")
     finally:
         cursor.close()
+
 
 class DatabaseManager:
     def __init__(self, config_path: str | Path | None = None):
@@ -49,7 +69,7 @@ class DatabaseManager:
         self.async_engine = None
         self.SessionLocal = None
         self.AsyncSessionLocal = None
-        
+
     def _load_config(self, config_path: Path) -> dict:
         """Load database configuration from YAML"""
         try:
@@ -80,18 +100,18 @@ class DatabaseManager:
         path = path.resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         return path.as_posix()
-    
+
     def get_database_url(self, async_mode: bool = False) -> str:
         """Get database URL based on configuration"""
         db_type = self.config.get('type', 'sqlite')
 
         if db_type == 'sqlite':
             db_path = self._sqlite_database_path()
-            
+
             if async_mode:
                 return f"sqlite+aiosqlite:///{db_path}"
             return f"sqlite:///{db_path}"
-        
+
         elif db_type == 'postgresql':
             if os.getenv("RAVENX_DATABASE_PATH") is not None:
                 raise ValueError("RAVENX_DATABASE_PATH requires SQLite configuration")
@@ -101,21 +121,21 @@ class DatabaseManager:
             database = pg_config.get('database', 'raven_x')
             username = pg_config.get('username', 'raven_admin')
             password = pg_config.get('password', 'password')
-            
+
             driver = "postgresql+asyncpg" if async_mode else "postgresql"
             return URL.create(driver, username=username, password=password,
                               host=host, port=port, database=database).render_as_string(hide_password=False)
-        
+
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
-    
+
     def initialize_sync_engine(self):
         """Initialize synchronous database engine"""
         database_url = self.get_database_url(async_mode=False)
-        
+
         connect_args = {}
         engine_kwargs = {'echo': self.config.get('echo', False)}
-        
+
         if database_url.startswith('sqlite'):
             # SQLite-specific configuration
             connect_args = {"check_same_thread": False, "timeout": 30.0}
@@ -125,41 +145,41 @@ class DatabaseManager:
             # PostgreSQL-specific configuration
             engine_kwargs['pool_size'] = self.config.get('pool_size', 20)
             engine_kwargs['max_overflow'] = self.config.get('max_overflow', 10)
-        
+
         self.engine = create_engine(
             database_url,
             connect_args=connect_args,
             **engine_kwargs
         )
-        
+
         # Enable WAL mode for SQLite
         if database_url.startswith('sqlite'):
             @event.listens_for(self.engine, "connect")
             def set_sqlite_pragma(dbapi_conn, connection_record):
                 _configure_sqlite_connection(dbapi_conn, memory=database_url.endswith(':memory:'))
-        
+
         self.SessionLocal = sessionmaker(
             autocommit=False,
             autoflush=False,
             bind=self.engine
         )
-        
+
         logger.info("Sync database engine initialized type=%s", self.config.get('type', 'sqlite'))
-    
+
     def initialize_async_engine(self):
         """Initialize asynchronous database engine"""
         database_url = self.get_database_url(async_mode=True)
-        
+
         connect_args = {}
         engine_kwargs = {'echo': self.config.get('echo', False)}
-        
+
         if database_url.startswith('sqlite'):
             connect_args = {"check_same_thread": False, "timeout": 30.0}
             engine_kwargs['poolclass'] = StaticPool if database_url.endswith(':memory:') else NullPool
         else:
             # PostgreSQL only
             pass
-        
+
         self.async_engine = create_async_engine(
             database_url,
             connect_args=connect_args,
@@ -169,23 +189,26 @@ class DatabaseManager:
             @event.listens_for(self.async_engine.sync_engine, "connect")
             def set_async_sqlite_pragma(dbapi_conn, connection_record):
                 _configure_sqlite_connection(dbapi_conn, memory=database_url.endswith(':memory:'))
-        
+
         self.AsyncSessionLocal = async_sessionmaker(
             self.async_engine,
             class_=AsyncSession,
             expire_on_commit=False
         )
-        
+
         logger.info("Async database engine initialized type=%s", self.config.get('type', 'sqlite'))
-    
+
     def create_tables(self):
         """Create all database tables"""
         if not self.engine:
             self.initialize_sync_engine()
-        
+
         try:
             Base.metadata.create_all(bind=self.engine)
             self._upgrade_legacy_tenancy_columns()
+            if self.engine.dialect.name == "sqlite":
+                from backend.application.ops.schema import apply_sqlite_migrations
+                apply_sqlite_migrations(self.engine)
             # create_all does not add indexes to pre-existing tables.  Bearer
             # authentication must use an indexed exact verifier lookup there.
             with self.engine.begin() as connection:
@@ -277,12 +300,12 @@ class DatabaseManager:
                         WHERE {name} IS NULL
                           AND json_valid(event_metadata)
                           AND json_extract(event_metadata, '$.{name}') IS NOT NULL"""))
-    
+
     async def create_tables_async(self):
         """Create all database tables asynchronously"""
         if not self.async_engine:
             self.initialize_async_engine()
-        
+
         try:
             async with self.async_engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
@@ -310,17 +333,22 @@ class DatabaseManager:
                                 f"UPDATE security_audit_events SET {name} = json_extract(event_metadata, '$.{name}') "
                                 f"WHERE {name} IS NULL AND json_valid(event_metadata) "
                                 f"AND json_extract(event_metadata, '$.{name}') IS NOT NULL")
+            if self.async_engine.dialect.name == "sqlite":
+                if not self.engine:
+                    self.initialize_sync_engine()
+                from backend.application.ops.schema import apply_sqlite_migrations
+                apply_sqlite_migrations(self.engine)
             logger.info("Database tables created successfully (async)")
         except Exception as e:
             logger.error("Failed to create tables (async) error_type=%s", type(e).__name__)
             raise
-    
+
     @contextmanager
     def get_db(self) -> Generator[Session, None, None]:
         """Get synchronous database session (context manager)"""
         if not self.SessionLocal:
             self.initialize_sync_engine()
-        
+
         db = self.SessionLocal()
         try:
             yield db
@@ -331,13 +359,13 @@ class DatabaseManager:
             raise
         finally:
             db.close()
-    
+
     @asynccontextmanager
     async def get_async_db(self) -> AsyncGenerator[AsyncSession, None]:
         """Get asynchronous database session (async context manager)"""
         if not self.AsyncSessionLocal:
             self.initialize_async_engine()
-        
+
         async with self.AsyncSessionLocal() as session:
             try:
                 yield session
@@ -346,13 +374,13 @@ class DatabaseManager:
                 await session.rollback()
                 logger.error("Database error (async) error_type=%s", type(e).__name__)
                 raise
-    
+
     def close(self):
         """Close database connections"""
         if self.engine:
             self.engine.dispose()
             logger.info("Sync database engine disposed")
-    
+
     async def close_async(self):
         """Close async database connections"""
         if self.async_engine:

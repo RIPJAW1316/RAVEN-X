@@ -28,6 +28,7 @@ from ..application.control_plane import AgentSessionRegistry, ControlPlaneAgentH
 from ..application.control_plane import RemoteAssessmentCancellationService, RemoteAssessmentDispatcher
 from ..application.control_plane import RemoteAssessmentReconciler
 from ..application.enrollment.service import EnrollmentService
+from ..infrastructure.security.verifier_key import bind_control_plane_verifier_key
 from ..application.enrollment import TenantEnrollmentService
 from ..application.assessment import TenantAssessmentService
 from ..application.scheduling import TenantAssessmentScheduleService, AssessmentScheduleRunner, AssessmentScheduleWorker
@@ -129,11 +130,14 @@ async def lifespan(app: FastAPI):
     settings.validate()
     # Startup
     logger.info("🚀 RAVEN-X Enterprise API Starting...")
-    
-    # Initialize database
+
+    # Initialize database, then bind the HMAC key before any request is served.
+    # A custody failure raises here, so the process never logs ready and never
+    # accepts traffic with a missing or mismatched verifier key.
     await db_manager.create_tables_async()
+    bind_control_plane_verifier_key(db_manager, agent_enrollment_service, environment=settings.environment)
     logger.info("✅ Database initialized")
-    
+
     # Start behavioral monitoring
     if behavioral_monitor is not None and config['monitoring']['real_time_enabled']:
         behavioral_monitor.start_monitoring()
@@ -142,11 +146,11 @@ async def lifespan(app: FastAPI):
         assessment_schedule_worker.start()
     maintenance_stop = asyncio.Event()
     maintenance = asyncio.create_task(_maintain_control_plane(maintenance_stop))
-    
+
     logger.info("🟢 RAVEN-X Enterprise API READY!")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("🛑 Shutting down RAVEN-X Enterprise API...")
     if behavioral_monitor is not None:
@@ -311,17 +315,24 @@ agent_handlers = ControlPlaneAgentHandlers(agent_sessions, agent_assessments, ag
                                            endpoint_repository=agent_endpoint_repository, presence_service=presence_service)
 agent_message_router = TypedMessageRouter()
 agent_handlers.register_routes(agent_message_router)
-agent_enrollment_service = EnrollmentService(SQLAlchemyEnrollmentRepository(db_manager), audit_sink=security_audit_repository)
+agent_enrollment_service = EnrollmentService(
+    SQLAlchemyEnrollmentRepository(db_manager),
+    audit_sink=security_audit_repository,
+    organization_repository=SQLAlchemyOrganizationRepository(db_manager),
+    defer_verifier_key=True,
+)
+# One durable message-id namespace for protocol messages and credential renewal.
+agent_replay_guard = SQLAlchemyReplayGuard(db_manager)
 agent_message_processor = AgentMessageProcessor(
     CredentialEndpointAuthenticator(agent_enrollment_service),
-    SQLAlchemyReplayGuard(db_manager),
+    agent_replay_guard,
     router=agent_message_router,
     audit_repository=security_audit_repository,
 )
 agent_http_transport = HttpControlPlaneTransport()
 app.include_router(
     create_agent_http_router(agent_message_processor, agent_enrollment_service, agent_http_transport.outbox,
-                             work_repository=agent_work_repository),
+                             work_repository=agent_work_repository, replay_guard=agent_replay_guard),
     prefix="/api/v1/agent",
     tags=["Agent Transport"],
 )
@@ -521,7 +532,7 @@ async def get_platform_stats():
         raise HTTPException(status_code=503, detail="optional monitoring components are unavailable")
     learning_stats = await learning_engine.get_learning_stats()
     monitoring_stats = await behavioral_monitor.get_monitoring_stats()
-    
+
     return {
         "timestamp": datetime.utcnow().isoformat(),
         "learning": learning_stats,
@@ -541,7 +552,7 @@ if __name__ == "__main__":
     # Run the API server
     settings.validate()
     server_config = config.get('server', {})
-    
+
     uvicorn.run(
         "backend.api.main:app",
         host=settings.server_host,

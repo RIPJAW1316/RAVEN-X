@@ -225,5 +225,6 @@ def test_event_classification_matches_the_documented_policy():
     assert classify("authorization.denied") is AuditEventClass.SECURITY
     assert classify("human.authentication_failed") is AuditEventClass.SECURITY
     assert classify("agent.message_replay_rejected") is AuditEventClass.SECURITY
+    assert classify("credential.lineage_revoked") is AuditEventClass.SECURITY
     assert classify("endpoint.registered") is AuditEventClass.OPERATIONAL
     assert classify("compliance.snapshot.create") is AuditEventClass.OPERATIONAL

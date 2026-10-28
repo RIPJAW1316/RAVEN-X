@@ -1,6 +1,8 @@
 """Actual production-app composition checks with isolated SQLite state."""
+import os
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from backend.application.identity import HumanIdentityService
@@ -12,8 +14,13 @@ from backend.domain.security import SecurityPrincipal
 def test_main_mounts_human_and_agent_boundaries_with_isolated_database(tmp_path):
     import backend.api.main as main
 
+    from backend.infrastructure.security.windows_files import protect_private_directory
+    database_dir = Path(os.environ["LOCALAPPDATA"]) / "RAVEN-X" / "ws01-api-tests" / uuid4().hex
+    database_dir.mkdir(parents=True)
+    if os.name == "nt":
+        protect_private_directory(database_dir)
     manager = main.db_manager
-    manager.config = {"type": "sqlite", "sqlite_path": str(tmp_path / "control-plane.db"), "echo": False}
+    manager.config = {"type": "sqlite", "sqlite_path": str(database_dir / "control-plane.db"), "echo": False}
     manager.engine = manager.async_engine = manager.SessionLocal = manager.AsyncSessionLocal = None
     manager.create_tables()
 

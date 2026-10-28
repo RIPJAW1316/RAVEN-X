@@ -1,5 +1,5 @@
 # backend/core/database/models.py
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Float, Boolean, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, Integer, String, DateTime, JSON, Float, Boolean, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -11,7 +11,7 @@ def _uuid(): return str(uuid.uuid4())
 
 class Scan(Base):
     __tablename__ = 'scans'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     scan_type = Column(String(50))  # full, quick, targeted
     start_time = Column(DateTime, default=datetime.utcnow)
@@ -26,13 +26,13 @@ class Scan(Base):
     medium_count = Column(Integer, default=0)
     low_count = Column(Integer, default=0)
     status = Column(String(20))  # running, completed, failed
-    
+
     vulnerabilities = relationship('Vulnerability', back_populates='scan', cascade='all, delete-orphan')
     fixes = relationship('Fix', back_populates='scan', cascade='all, delete-orphan')
 
 class Vulnerability(Base):
     __tablename__ = 'vulnerabilities'
-    
+
     id = Column(String(36), primary_key=True, default=_uuid)
     scan_id = Column(String(36), ForeignKey('scans.id'))
     severity = Column(String(20))
@@ -53,13 +53,13 @@ class Vulnerability(Base):
     first_seen = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow)
     occurrence_count = Column(Integer, default=1)
-    
+
     scan = relationship('Scan', back_populates='vulnerabilities')
     fixes = relationship('Fix', back_populates='vulnerability')
 
 class Fix(Base):
     __tablename__ = 'fixes'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     scan_id = Column(String(36), ForeignKey('scans.id'))
     vulnerability_id = Column(String(36), ForeignKey('vulnerabilities.id'))
@@ -70,18 +70,18 @@ class Fix(Base):
     command_executed = Column(Text, nullable=True)
     output = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
-    
+
     # For learning from fixes
     success_rate = Column(Float, nullable=True)
     rollback_performed = Column(Boolean, default=False)
-    
+
     scan = relationship('Scan', back_populates='fixes')
     vulnerability = relationship('Vulnerability', back_populates='fixes')
 
 class ThreatPattern(Base):
     """Learned threat patterns from scans and incidents"""
     __tablename__ = 'threat_patterns'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     pattern_type = Column(String(50))  # malware, config, behavior, network
     pattern_signature = Column(String(255), unique=True)
@@ -93,7 +93,7 @@ class ThreatPattern(Base):
     last_detected = Column(DateTime, default=datetime.utcnow)
     false_positive_count = Column(Integer, default=0)
     true_positive_count = Column(Integer, default=0)
-    
+
     # Learning metadata
     source = Column(String(50))  # internal_scan, user_feedback, external_intel
     is_active = Column(Boolean, default=True)
@@ -103,29 +103,29 @@ class ThreatPattern(Base):
 class MalwareSample(Base):
     """Stored malware samples for analysis and learning"""
     __tablename__ = 'malware_samples'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     file_hash_md5 = Column(String(32), unique=True)
     file_hash_sha256 = Column(String(64), unique=True)
     file_path = Column(String(500))
     file_size = Column(Integer)
     file_type = Column(String(50))
-    
+
     # Detection metadata
     detected_at = Column(DateTime, default=datetime.utcnow)
     detection_method = Column(String(50))  # signature, heuristic, ml, behavior
     severity = Column(String(20))
-    
+
     # Analysis results
     yara_matches = Column(JSON, nullable=True)
     behavioral_indicators = Column(JSON, nullable=True)
     ml_prediction = Column(JSON, nullable=True)
     static_analysis = Column(JSON, nullable=True)
-    
+
     # Quarantine info
     quarantined = Column(Boolean, default=False)
     quarantine_path = Column(String(500), nullable=True)
-    
+
     # Learning data
     user_verified = Column(Boolean, default=False)
     is_false_positive = Column(Boolean, default=False)
@@ -134,7 +134,7 @@ class MalwareSample(Base):
 class AIAnalysis(Base):
     """AI analysis results for historical tracking"""
     __tablename__ = 'ai_analyses'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     scan_id = Column(String(36), ForeignKey('scans.id'))
     model_name = Column(String(100))
@@ -150,7 +150,7 @@ class AIAnalysis(Base):
 class SystemBaseline(Base):
     """Baseline system configurations for anomaly detection"""
     __tablename__ = 'system_baselines'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     hostname = Column(String(255))
     baseline_type = Column(String(50))  # services, ports, processes, files, registry
@@ -162,7 +162,7 @@ class SystemBaseline(Base):
 class UserFeedback(Base):
     """User feedback for improving AI and detection"""
     __tablename__ = 'user_feedback'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     vulnerability_id = Column(String(36), ForeignKey('vulnerabilities.id'), nullable=True)
     fix_id = Column(String(36), ForeignKey('fixes.id'), nullable=True)
@@ -270,6 +270,48 @@ class EndpointCredentialRecord(Base):
     revoked_at = Column(DateTime, nullable=True)
     revocation_reason = Column(String(255), nullable=True)
     credential_metadata = Column(JSON, nullable=False, default=dict)
+
+
+class SchemaVersionRecord(Base):
+    """Deterministic SQLite schema version; not a general migration framework."""
+    __tablename__ = 'ravenx_schema_versions'
+
+    version = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False)
+    applied_at = Column(DateTime, nullable=False)
+
+
+class VerifierKeyRecord(Base):
+    """Non-secret fingerprint of the HMAC verifier key. The key itself is not stored."""
+    __tablename__ = 'ravenx_verifier_keys'
+
+    id = Column(Integer, primary_key=True)
+    algorithm = Column(String(40), nullable=False)
+    key_id = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class EndpointCredentialRenewalRecord(Base):
+    """Agent-driven renewal lineage; holds no secret material.
+
+    The primary key on the successor and the unique predecessor column make a
+    credential lineage linear: one predecessor can be renewed at most once.
+    ``predecessor_valid_until`` is written once and never extended.
+    """
+    __tablename__ = 'endpoint_credential_renewals'
+    __table_args__ = (CheckConstraint('successor_credential_id <> predecessor_credential_id',
+                                      name='ck_credential_renewal_distinct'),)
+
+    successor_credential_id = Column(String(36), ForeignKey('endpoint_credentials.credential_id'), primary_key=True)
+    predecessor_credential_id = Column(String(36), ForeignKey('endpoint_credentials.credential_id'),
+                                       nullable=False, unique=True)
+    endpoint_id = Column(String(36), ForeignKey('endpoints.endpoint_id'), nullable=False, index=True)
+    organization_id = Column(String(36), nullable=True, index=True)
+    issued_at = Column(DateTime, nullable=False)
+    predecessor_valid_until = Column(DateTime, nullable=False)
+    confirmed_at = Column(DateTime, nullable=True)
+    predecessor_closed_at = Column(DateTime, nullable=True)
+    closed_reason = Column(String(40), nullable=True)
 
 
 class AgentMessageReplayRecord(Base):

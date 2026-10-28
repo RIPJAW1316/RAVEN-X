@@ -194,7 +194,7 @@ def _generate_local_tls_material(directory: Path, hosts: list[str],
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="RAVEN-X local server administration")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("bootstrap", "serve", "tls-init"):
+    for command in ("bootstrap", "serve", "tls-init", "migrate", "rollback-check"):
         item = sub.add_parser(command)
         item.add_argument("--data-dir", type=Path, default=default_data_dir())
         if command == "bootstrap":
@@ -203,7 +203,9 @@ def main(argv=None) -> int:
             item.add_argument("--organization", required=True)
         elif command == "tls-init":
             item.add_argument("--host", action="append", default=[], help="LAN IP or DNS name; repeat for each name")
-        else:
+        elif command == "rollback-check":
+            item.add_argument("--target-schema", type=int, default=1)
+        elif command == "serve":
             item.add_argument("--host", default="127.0.0.1")
             item.add_argument("--port", type=int, default=8443)
             item.add_argument("--cert", type=Path)
@@ -211,10 +213,57 @@ def main(argv=None) -> int:
             item.add_argument("--local-http", action="store_true", help="Loopback development only")
     args = parser.parse_args(argv)
     data_dir = args.data_dir.absolute()
-    os.environ["RAVENX_DATABASE_PATH"] = str(data_dir / "raven_x.db")
-    os.environ["RAVENX_ENABLE_LEGACY_ROUTES"] = "false"
+    if args.command in {"migrate", "bootstrap", "serve"}:
+        os.environ["RAVENX_DATABASE_PATH"] = str(data_dir / "raven_x.db")
+        os.environ["RAVENX_ENABLE_LEGACY_ROUTES"] = "false"
     try:
-        if args.command == "tls-init":
+        if args.command == "migrate":
+            from .core.database.database import DatabaseManager
+            from .application.ops.schema import apply_sqlite_migrations, schema_version
+            database = DatabaseManager()
+            try:
+                database.create_tables()
+                version = apply_sqlite_migrations(database.engine)
+                print(json.dumps({"schema_version": version, "recorded": schema_version(database.engine)}))
+            finally:
+                database.close()
+        elif args.command == "rollback-check":
+            from .application.ops.rollback import evaluate_server_rollback, inspect_existing_sqlite_readonly
+            db_path = data_dir / "raven_x.db"
+            if not db_path.is_file():
+                print(json.dumps({
+                    "allowed": False, "code": "missing_database",
+                    "message": "rollback-check refuses to create a database; the existing file was not found",
+                    "open_lineage_count": 0,
+                    "operator_action": "do_not_create_a_database_during_rollback_check",
+                }, indent=2))
+                return 3
+            try:
+                with inspect_existing_sqlite_readonly(db_path) as engine:
+                    decision = evaluate_server_rollback(target_schema=args.target_schema, engine=engine)
+                print(json.dumps({
+                    "allowed": decision.allowed, "code": decision.code, "message": decision.message,
+                    "open_lineage_count": decision.open_lineage_count,
+                    "operator_action": decision.operator_action,
+                }, indent=2))
+                if not decision.allowed:
+                    return 3
+            except Exception as error:
+                payload = {
+                    "allowed": False, "code": "rollback_check_failed",
+                    "message": type(error).__name__,
+                    "open_lineage_count": 0,
+                    "operator_action": "do_not_migrate_during_rollback_check",
+                }
+                residue = getattr(error, "residue", None)
+                if isinstance(residue, str) and residue.startswith("ravenx-rollback-"):
+                    payload["residue"] = residue
+                    payload["operator_action"] = (
+                        "delete_only_the_named_owned_snapshot_under_the_private_rollback_snapshot_root"
+                    )
+                print(json.dumps(payload, indent=2))
+                return 4
+        elif args.command == "tls-init":
             prepare_data_dir(data_dir)
             result = generate_local_tls(data_dir / "tls", args.host or [socket.gethostname()])
             print(json.dumps(result, indent=2))

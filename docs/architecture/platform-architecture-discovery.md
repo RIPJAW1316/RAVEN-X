@@ -402,7 +402,7 @@ loop (the integrator must write it; none exists):
 
 ## 7. Current database architecture
 
-- **Engine:** SQLite at `data/raven_x.db`, relative to the CWD. WAL mode, `synchronous=NORMAL`, 64 MB cache (pragmas set on the sync engine only). **No `foreign_keys=ON`**, so the declared FKs are decorative. **No `busy_timeout`.**
+- **Engine:** SQLite at `data/raven_x.db`, relative to the repository when the default config is used. WAL mode, `synchronous=FULL` on both the sync and async engines, 64 MB cache, `busy_timeout=30000`. FULL flushes commit frames to the OS and is not hardware power-loss proof. **No `foreign_keys=ON`**, so the declared FKs are decorative.
 - **Two engines.**
   - Sync engine: every enterprise repository uses `StaticPool`, i.e. *one* connection shared by every thread.
   - Async engine (aiosqlite): startup DDL, `/ready`, legacy routes.

@@ -18,6 +18,18 @@ class EndpointStatus(str, Enum):
     REVOKED = "revoked"
 
 
+# Presence (DEGRADED/OFFLINE) is operational, not a trust revocation.
+# NEW was never approved. REVOKED is a trust revocation.
+APPROVED_AGENT_TRUST_STATUSES = frozenset({
+    EndpointStatus.ACTIVE, EndpointStatus.DEGRADED, EndpointStatus.OFFLINE,
+})
+
+
+def is_approved_for_agent_trust(status: EndpointStatus) -> bool:
+    """True if the endpoint was approved and has not been revoked."""
+    return EndpointStatus(status) in APPROVED_AGENT_TRUST_STATUSES
+
+
 @dataclass(frozen=True)
 class EndpointId:
     """Stable Raven-X-managed identity, independent of machine attributes."""

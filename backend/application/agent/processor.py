@@ -16,7 +16,7 @@ from ...protocol.agent import (
     ProtocolError, ProtocolValidationPolicy, ReplayDetectedError, default_message_registry, message_direction,
     validate_envelope,
 )
-from ..enrollment import EnrollmentError, EnrollmentService
+from ..enrollment import AgentOrganizationSuspendedError, EnrollmentError, EnrollmentService
 from ..ports.agent_authorization import (
     AgentMessageAuthorizer, AuthenticatedEndpointContext, AuthorizationDecision, NullAuditEventSink,
 )
@@ -42,6 +42,8 @@ class CredentialEndpointAuthenticator:
                 )
             else:
                 credential = self._service.verify_credential(envelope.endpoint_id, presented.secret, now=now)
+        except AgentOrganizationSuspendedError as error:
+            raise MessageAcceptanceError("endpoint_not_active", "endpoint organization is not active") from error
         except EnrollmentError as error:
             raise MessageAcceptanceError("invalid_credential", "credential authentication failed") from error
         if credential.endpoint_id != envelope.endpoint_id:
@@ -126,6 +128,11 @@ class AgentMessageProcessor:
         self._control_authorizer = control_plane_authorizer or ConservativeControlPlaneAuthorizer()
         self._audit_repository = audit_repository
 
+    @property
+    def replay_guard(self):
+        """Shared message-id claim store; credential renewal uses the same namespace."""
+        return self._replay_guard
+
     def process(self, envelope: AgentMessageEnvelope, presented: PresentedCredential, *, now: Optional[datetime] = None):
         now = _utc(now or datetime.now(timezone.utc))
         try:
@@ -149,7 +156,7 @@ class AgentMessageProcessor:
             if not self._router.has_handler(envelope.message_type):
                 raise MessageAcceptanceError("unknown_message_type", "no handler is registered for this message type")
             payload = self._router.decode(envelope)
-            if not _claim(self._replay_guard, envelope, context.endpoint_id, now, now + self._policy.max_clock_skew + timedelta(seconds=30)):
+            if not _claim(self._replay_guard, envelope, context.endpoint_id, now, now + self._policy.replay_retention):
                 self._audit.emit("replay_rejected", endpoint_id=context.endpoint_id)
                 raise MessageAcceptanceError("replayed_message", "message has already been accepted")
             return self._router.invoke(envelope, context, payload)

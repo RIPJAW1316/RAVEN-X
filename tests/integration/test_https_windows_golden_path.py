@@ -6,8 +6,10 @@ Windows agent uses its protected Windows state store instead.
 """
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import platform
 from pathlib import Path
+import secrets
 import socket
 import ssl
 import sys
@@ -37,6 +39,7 @@ from backend.application.reporting.fleet_report import TenantFleetReportService
 from backend.application.scanner.local_capabilities import LocalTargetCapabilityProvider
 from backend.application.scanner.registry import ScannerRegistry
 from backend.core.database.database import DatabaseManager
+from backend.core.database.models import EndpointCredentialRecord
 from backend.cli import generate_local_tls
 from backend.domain.endpoint import EndpointId
 from backend.domain.enrollment import CredentialId
@@ -103,20 +106,20 @@ def _isolated_app(tmp_path):
     assessment_repository = SQLAlchemyRemoteAssessmentRepository(db)
     work_repository = SQLAlchemyAgentWorkRepository(db, endpoint_repository=endpoint_repository,
                                                      assessment_repository=assessment_repository)
-    agent_enrollment = EnrollmentService(enrollment_repository)
     sessions = AgentSessionRegistry()
     handlers = ControlPlaneAgentHandlers(sessions, assessment_repository, work_repository,
                                           endpoint_repository=endpoint_repository)
     agent_router = TypedMessageRouter()
     handlers.register_routes(agent_router)
-    processor = AgentMessageProcessor(CredentialEndpointAuthenticator(agent_enrollment),
-                                      SQLAlchemyReplayGuard(db), router=agent_router)
 
     users = InMemoryUserRepository()
     owner = HumanIdentityService(users).create_initial_user(
         "golden-owner@example.com", "Golden owner", "GOLDEN_PASSWORD_SENTINEL")
     organizations = InMemoryOrganizationRepository()
     organization = OrganizationService(organizations).create("Golden tenant")
+    agent_enrollment = EnrollmentService(enrollment_repository, organization_repository=organizations)
+    processor = AgentMessageProcessor(CredentialEndpointAuthenticator(agent_enrollment),
+                                      SQLAlchemyReplayGuard(db), router=agent_router)
     memberships = InMemoryOrganizationMembershipRepository()
     membership = OrganizationMembershipService(memberships, organizations, users).create(
         owner.user_id, organization.organization_id)
@@ -230,6 +233,39 @@ def test_verified_https_windows_read_only_golden_path(tmp_path):
                 endpoint_url = tenant_base + f"/endpoints/{grant.endpoint_id}"
                 approved = human.post(endpoint_url + "/approve", headers=human_headers)
                 assert approved.status_code == 200 and approved.json()["status"] == "active"
+
+                # Place the enrolled credential inside the server renewal window, then
+                # propose an agent-prepared successor over verified loopback HTTPS.
+                with db.get_db() as session:
+                    row = session.get(EndpointCredentialRecord, grant.credential_id)
+                    row.expires_at = (datetime.now(timezone.utc) + timedelta(days=5)).replace(tzinfo=None)
+                successor_id = str(CredentialId.new())
+                successor_secret = secrets.token_urlsafe(32)
+                receipt = transport.renew_credential(
+                    credential=AgentCredential(CredentialId(grant.credential_id), grant.credential_secret),
+                    successor_credential_id=successor_id,
+                    successor_credential_secret=successor_secret,
+                    protocol_version="1.0",
+                )
+                assert receipt.endpoint_id == grant.endpoint_id
+                assert receipt.organization_id == str(organization.organization_id)
+                assert receipt.credential_id == successor_id
+                assert receipt.replaces_credential_id == grant.credential_id
+                credentials.store(AgentCredential(CredentialId(successor_id), successor_secret))
+                transport.confirm_renewal(
+                    credential=AgentCredential(CredentialId(successor_id), successor_secret),
+                    replaces_credential_id=grant.credential_id,
+                    protocol_version="1.0",
+                )
+                old_cred_attempt = human.post(
+                    base_url + "/api/v1/agent/work",
+                    headers={
+                        "Authorization": f"Bearer {grant.credential_secret}",
+                        "X-Raven-Endpoint-Id": str(grant.endpoint_id),
+                    },
+                )
+                assert old_cred_attempt.status_code == 401
+
                 requested = human.post(tenant_base + "/assessments", headers=human_headers,
                     json={"endpoint_id": str(grant.endpoint_id),
                           "scanner_ids": ["windows.uac", "windows.bitlocker"]})

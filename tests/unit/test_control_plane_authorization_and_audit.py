@@ -30,8 +30,13 @@ def test_endpoint_principal_is_self_scoped_and_system_policy_is_explicit():
     authorizer = ConservativeControlPlaneAuthorizer()
     endpoint = SecurityPrincipal.endpoint(endpoint_a)
     assert authorizer.authorize(_request(endpoint, AuthorizationAction.AGENT_HEARTBEAT_SUBMIT, endpoint_a)).allowed
+    assert authorizer.authorize(_request(endpoint, AuthorizationAction.CREDENTIAL_RENEW, endpoint_a)).allowed
     denied = authorizer.authorize(_request(endpoint, AuthorizationAction.AGENT_HEARTBEAT_SUBMIT, endpoint_b))
     assert not denied.allowed and denied.reason_code == "endpoint_scope_mismatch"
+    denied_renew = authorizer.authorize(_request(endpoint, AuthorizationAction.CREDENTIAL_RENEW, endpoint_b))
+    assert not denied_renew.allowed and denied_renew.reason_code == "endpoint_scope_mismatch"
+    denied_rotate = authorizer.authorize(_request(endpoint, AuthorizationAction.CREDENTIAL_ROTATE, endpoint_a))
+    assert not denied_rotate.allowed and denied_rotate.reason_code == "endpoint_action_not_allowed"
     denied = authorizer.authorize(_request(endpoint, AuthorizationAction.ENDPOINT_REVOKE, endpoint_a))
     assert not denied.allowed and denied.reason_code == "endpoint_action_not_allowed"
     assert authorizer.authorize(_request(SecurityPrincipal.system(), AuthorizationAction.ENDPOINT_REVOKE, endpoint_a)).allowed
@@ -93,11 +98,14 @@ def test_authenticated_message_audit_records_success_replay_and_invalid_credenti
 
 
 def test_endpoint_and_credential_lifecycle_events_are_audited_without_secret_material():
+    from backend.domain.organization import OrganizationId
+
     now = datetime(2026, 8, 23, 17, 0, tzinfo=timezone.utc)
+    org_id = OrganizationId.new()
     audit = InMemorySecurityAuditRepository()
     enrollment_repo = InMemoryEnrollmentRepository()
     enrollment = EnrollmentService(enrollment_repo, audit_sink=audit)
-    authorization, token = enrollment.create_enrollment_authorization(now=now)
+    authorization, token = enrollment.create_enrollment_authorization(now=now, organization_id=org_id)
     endpoint, credential, raw = enrollment.accept_enrollment(
         authorization.enrollment_id, token.value,
         EnrollmentRequest("lifecycle-agent", PlatformInfo("Windows"), agent=AgentInfo("1.0", "1.0")), now=now,
@@ -123,5 +131,9 @@ def test_endpoint_and_credential_lifecycle_events_are_audited_without_secret_mat
     assert SecurityAuditEventType.CREDENTIAL_ROTATED.value in types
     assert SecurityAuditEventType.CREDENTIAL_REVOKED.value in types
     assert SecurityAuditEventType.ENDPOINT_REVOKED.value in types
+    rotated_event = audit.list(event_type=SecurityAuditEventType.CREDENTIAL_ROTATED.value)[0]
+    revoked_event = audit.list(event_type=SecurityAuditEventType.CREDENTIAL_REVOKED.value)[0]
+    assert rotated_event.organization_id == str(org_id)
+    assert revoked_event.organization_id == str(org_id)
     values = str([event.to_dict() for event in audit.list()])
     assert raw.value not in values and replacement_raw.value not in values

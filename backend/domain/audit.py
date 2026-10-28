@@ -46,6 +46,10 @@ _CRITICAL_EVENT_TYPES = frozenset({
     "agent.message_replay_rejected",
     "agent.message_authorization_denied",
     "credential.authentication_failed",
+    # A second, different successor proposed for an already-renewed credential:
+    # either corrupted agent state or two holders of one credential.
+    "credential.renewal_conflict",
+    "credential.lineage_revoked",
     "enrollment.consumption_failed",
     "human.authentication_failed",
     "human.authentication_rate_limited",

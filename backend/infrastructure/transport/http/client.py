@@ -3,14 +3,14 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Optional, Union
 
 import httpx
 
 from ....application.ports.agent_transport import AgentMessageSender
 from ....domain.endpoint import EndpointId
-from ....protocol.agent import AgentMessageEnvelope, MessageDirection, message_direction
+from ....protocol.agent import AgentMessageEnvelope, MessageDirection, ProtocolVersion, message_direction
 
 
 class HttpTransportError(RuntimeError):
@@ -42,6 +42,8 @@ class HttpTransportConfig:
     messages_path: str = "/api/v1/agent/messages"
     work_path: str = "/api/v1/agent/work"
     enroll_path: str = "/api/v1/agent/enroll"
+    renew_path: str = "/api/v1/agent/renew"
+    renew_confirm_path: str = "/api/v1/agent/renew/confirm"
 
     def __post_init__(self):
         if not self.base_url.strip():
@@ -98,6 +100,78 @@ class EnrollmentGrant:
             raise HttpTransportError("invalid_response", "enrollment response is invalid")
         return cls(endpoint_id, credential_id, secret, organization_id,
                    protocol_version, status, expires.astimezone(timezone.utc))
+
+
+def _aware_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
+class RenewalReceipt:
+    """Server acknowledgement that an agent-prepared successor is active. Holds no secret."""
+
+    endpoint_id: EndpointId
+    organization_id: str
+    credential_id: str
+    replaces_credential_id: str
+    credential_expires_at: datetime
+    predecessor_valid_until: datetime
+    protocol_version: str
+
+    @classmethod
+    def from_dict(cls, data, *, now: Optional[datetime] = None):
+        try:
+            receipt = cls(
+                endpoint_id=EndpointId(data["endpoint_id"]),
+                organization_id=str(UUID(data["organization_id"])),
+                credential_id=str(UUID(data["credential_id"])),
+                replaces_credential_id=str(UUID(data["replaces_credential_id"])),
+                credential_expires_at=_aware_utc(data["credential_expires_at"]),
+                predecessor_valid_until=_aware_utc(data["predecessor_valid_until"]),
+                protocol_version=data["protocol_version"],
+            )
+            status = data["status"]
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise HttpTransportError("invalid_response", "credential renewal response is invalid") from error
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if (status != "active" or not isinstance(receipt.protocol_version, str) or not receipt.protocol_version
+                or receipt.credential_id == receipt.replaces_credential_id
+                or not current < receipt.credential_expires_at <= current + timedelta(days=31)):
+            raise HttpTransportError("invalid_response", "credential renewal response is invalid")
+        return receipt
+
+
+@dataclass(frozen=True)
+class RenewalConfirmation:
+    """Server acknowledgement of successor possession; also the lost-response recovery answer."""
+
+    endpoint_id: EndpointId
+    organization_id: str
+    credential_id: str
+    credential_expires_at: datetime
+    replaces_credential_id: Optional[str]
+
+    @classmethod
+    def from_dict(cls, data, *, now: Optional[datetime] = None):
+        try:
+            replaces = data.get("replaces_credential_id")
+            confirmation = cls(
+                endpoint_id=EndpointId(data["endpoint_id"]),
+                organization_id=str(UUID(data["organization_id"])),
+                credential_id=str(UUID(data["credential_id"])),
+                credential_expires_at=_aware_utc(data["credential_expires_at"]),
+                replaces_credential_id=str(UUID(replaces)) if replaces is not None else None,
+            )
+            confirmed = data["confirmed"]
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise HttpTransportError("invalid_response", "renewal confirmation response is invalid") from error
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if confirmed is not True or not current < confirmation.credential_expires_at <= current + timedelta(days=31):
+            raise HttpTransportError("invalid_response", "renewal confirmation response is invalid")
+        return confirmation
 
 
 class HttpAgentEnrollmentClient:
@@ -241,8 +315,101 @@ class HttpAgentTransport(AgentMessageSender):
         if self._owns_client:
             self._client.close()
 
-    def _request(self, method, path, payload, *, endpoint_id):
-        credential = self.credential_store.load()
+    def renew_credential(
+        self,
+        *,
+        credential,
+        successor_credential_id: str,
+        successor_credential_secret: str,
+        protocol_version: Union[str, ProtocolVersion] = "1.0",
+        message_id: Optional[str] = None,
+        nonce: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> RenewalReceipt:
+        """Propose an agent-prepared successor, authenticated by ``credential`` (the predecessor).
+
+        The successor secret travels only in this TLS request body. The receipt
+        is accepted only if it names exactly this successor and predecessor.
+        """
+        endpoint_id = self._require_endpoint("credential renewal")
+        predecessor_id = str(UUID(str(credential.credential_id)))
+        successor_id = str(UUID(str(successor_credential_id)))
+        now = (timestamp or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        payload = {
+            "message_id": str(UUID(str(message_id))) if message_id is not None else str(uuid4()),
+            "timestamp": now.isoformat(),
+            "nonce": nonce or uuid4().hex,
+            "protocol_version": str(protocol_version),
+            "credential_id": predecessor_id,
+            "successor_credential_id": successor_id,
+            "successor_credential_secret": successor_credential_secret,
+        }
+        response = self._request("POST", self.config.renew_path, payload, endpoint_id=endpoint_id,
+                                 credential=credential)
+        if response.status_code != 200:
+            raise self._response_error(response)
+        receipt = RenewalReceipt.from_dict(self._json_object(response, "credential renewal"), now=now)
+        if receipt.endpoint_id != endpoint_id:
+            raise HttpTransportError("endpoint_mismatch", "renewal response targets another endpoint")
+        if receipt.credential_id != successor_id or receipt.replaces_credential_id != predecessor_id:
+            raise HttpTransportError("invalid_response", "renewal response credential lineage mismatch")
+        if receipt.protocol_version != str(protocol_version):
+            raise HttpTransportError("invalid_response", "renewal response protocol version mismatch")
+        return receipt
+
+    def confirm_renewal(
+        self,
+        *,
+        credential,
+        replaces_credential_id: Optional[str] = None,
+        protocol_version: Union[str, ProtocolVersion] = "1.0",
+        message_id: Optional[str] = None,
+        nonce: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> RenewalConfirmation:
+        """Authenticate with the successor ``credential`` to confirm (or recover) a renewal."""
+        endpoint_id = self._require_endpoint("renewal confirmation")
+        credential_id = str(UUID(str(credential.credential_id)))
+        now = (timestamp or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        payload = {
+            "message_id": str(UUID(str(message_id))) if message_id is not None else str(uuid4()),
+            "timestamp": now.isoformat(),
+            "nonce": nonce or uuid4().hex,
+            "protocol_version": str(protocol_version),
+            "credential_id": credential_id,
+        }
+        expected_predecessor = str(UUID(str(replaces_credential_id))) if replaces_credential_id is not None else None
+        if expected_predecessor is not None:
+            payload["replaces_credential_id"] = expected_predecessor
+        response = self._request("POST", self.config.renew_confirm_path, payload, endpoint_id=endpoint_id,
+                                 credential=credential)
+        if response.status_code != 200:
+            raise self._response_error(response)
+        confirmation = RenewalConfirmation.from_dict(self._json_object(response, "renewal confirmation"), now=now)
+        if confirmation.endpoint_id != endpoint_id:
+            raise HttpTransportError("endpoint_mismatch", "confirmation response targets another endpoint")
+        if confirmation.credential_id != credential_id or (
+                expected_predecessor is not None and confirmation.replaces_credential_id != expected_predecessor):
+            raise HttpTransportError("invalid_response", "confirmation response credential lineage mismatch")
+        return confirmation
+
+    def _require_endpoint(self, purpose: str) -> EndpointId:
+        if self.endpoint_id is None:
+            raise HttpTransportError("missing_endpoint_id", f"endpoint identity is required for {purpose}")
+        return self.endpoint_id
+
+    @staticmethod
+    def _json_object(response, purpose: str):
+        try:
+            data = response.json()
+        except ValueError as error:
+            raise HttpTransportError("invalid_response", f"{purpose} response is invalid") from error
+        if not isinstance(data, dict):
+            raise HttpTransportError("invalid_response", f"{purpose} response is invalid")
+        return data
+
+    def _request(self, method, path, payload, *, endpoint_id, credential=None):
+        credential = credential if credential is not None else self.credential_store.load()
         if credential is None:
             raise HttpTransportError("missing_credential", "agent credential is unavailable")
         headers = {
@@ -264,6 +431,19 @@ class HttpAgentTransport(AgentMessageSender):
             return HttpTransportError("authentication_failed", "control-plane authentication failed", status_code=401)
         if response.status_code == 403:
             return HttpTransportError("approval_required", "endpoint is not approved for this operation", status_code=403)
+        if response.status_code == 409:
+            # Only a fixed allowlist of server codes is read; no response text is echoed.
+            try:
+                body = response.json()
+                code = body.get("error") if isinstance(body, dict) else None
+            except ValueError:
+                code = None
+            if code not in _CONFLICT_CODES:
+                code = "replayed_message"
+            return HttpTransportError(code, "control-plane rejected the request as a conflict", status_code=409)
         if response.status_code == 413:
             return HttpTransportError("payload_too_large", "request was rejected as too large", status_code=413)
         return HttpTransportError("http_error", "control-plane rejected the request", status_code=response.status_code)
+
+
+_CONFLICT_CODES = frozenset({"replayed_message", "renewal_conflict", "renewal_not_due"})

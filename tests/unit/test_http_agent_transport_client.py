@@ -94,3 +94,67 @@ def test_work_queue_is_endpoint_isolated_and_leases_messages():
 
     with pytest.raises(ValueError):
         queue.enqueue(_heartbeat(first))
+
+
+def test_http_client_renew_credential_and_confirm_validate_lineage_and_redact_secret():
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from backend.infrastructure.transport.http.client import RenewalReceipt
+
+    endpoint = EndpointId.new()
+    old_id = "00000000-0000-0000-0000-000000000001"
+    new_id = str(uuid4())
+    successor_secret = "s" * 48
+    org_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    captured = []
+
+    def handler(request):
+        captured.append(request)
+        if request.url.path.endswith("/renew"):
+            body = request.read()
+            assert successor_secret.encode() in body
+            assert b"credential_secret" not in body or successor_secret.encode() in body
+            return httpx.Response(200, json={
+                "endpoint_id": str(endpoint),
+                "organization_id": org_id,
+                "credential_id": new_id,
+                "credential_expires_at": (now + timedelta(days=30)).isoformat(),
+                "replaces_credential_id": old_id,
+                "predecessor_valid_until": (now + timedelta(minutes=15)).isoformat(),
+                "protocol_version": "1.0",
+                "status": "active",
+            })
+        return httpx.Response(200, json={
+            "confirmed": True,
+            "endpoint_id": str(endpoint),
+            "organization_id": org_id,
+            "credential_id": new_id,
+            "credential_expires_at": (now + timedelta(days=30)).isoformat(),
+            "replaces_credential_id": old_id,
+        })
+
+    store = _credential()
+    transport = HttpAgentTransport(
+        HttpTransportConfig("https://control.example"),
+        store,
+        endpoint_id=endpoint,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    predecessor = AgentCredential(old_id, "secret-value")
+    receipt = transport.renew_credential(
+        credential=predecessor,
+        successor_credential_id=new_id,
+        successor_credential_secret=successor_secret,
+        timestamp=now,
+    )
+    assert isinstance(receipt, RenewalReceipt)
+    assert receipt.credential_id == new_id
+    assert receipt.replaces_credential_id == old_id
+    assert successor_secret not in repr(receipt)
+    assert not hasattr(receipt, "credential_secret")
+    successor = AgentCredential(new_id, successor_secret)
+    transport.confirm_renewal(credential=successor, replaces_credential_id=old_id, timestamp=now)
+    assert captured[0].headers["authorization"] == "Bearer secret-value"
+    assert captured[1].headers["authorization"] == f"Bearer {successor_secret}"

@@ -1,11 +1,24 @@
+import os
+from pathlib import Path
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from backend.api import main
 from backend.core.database.database import DatabaseManager
 
 
+def _protected_database_dir() -> Path:
+    from backend.infrastructure.security.windows_files import protect_private_directory
+    root = Path(os.environ["LOCALAPPDATA"]) / "RAVEN-X" / "ws01-api-tests" / uuid4().hex
+    root.mkdir(parents=True)
+    if os.name == "nt":
+        protect_private_directory(root)
+    return root
+
+
 def test_health_is_liveness_and_ready_checks_only_core_database(tmp_path, monkeypatch):
-    database_path = tmp_path / "ready.db"
+    database_path = _protected_database_dir() / "ready.db"
     config_path = tmp_path / "config.yaml"
     config_path.write_text("database:\n  type: sqlite\n  sqlite_path: '" + database_path.as_posix() + "'\n", encoding="utf-8")
     manager = DatabaseManager(str(config_path))

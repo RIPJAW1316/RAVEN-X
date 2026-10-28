@@ -69,6 +69,8 @@ def test_file_sqlite_uses_distinct_connections_and_busy_timeout(tmp_path):
     with manager.engine.connect() as first, manager.engine.connect() as second:
         assert first.connection.driver_connection is not second.connection.driver_connection
         assert first.exec_driver_sql("PRAGMA busy_timeout").scalar_one() == 30000
+        assert first.exec_driver_sql("PRAGMA synchronous").scalar_one() == 2
+        assert str(first.exec_driver_sql("PRAGMA journal_mode").scalar_one()).lower() == "wal"
     manager.close()
 
 
@@ -80,6 +82,10 @@ def test_async_file_sqlite_uses_distinct_connections_and_busy_timeout(tmp_path):
         async with manager.async_engine.connect() as connection:
             result = await connection.exec_driver_sql("PRAGMA busy_timeout")
             assert result.scalar_one() == 30000
+            synchronous = await connection.exec_driver_sql("PRAGMA synchronous")
+            assert synchronous.scalar_one() == 2
+            journal = await connection.exec_driver_sql("PRAGMA journal_mode")
+            assert str(journal.scalar_one()).lower() == "wal"
         await manager.close_async()
     asyncio.run(check())
 

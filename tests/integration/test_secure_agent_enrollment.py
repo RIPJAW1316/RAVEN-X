@@ -17,7 +17,7 @@ from backend.application.rbac import OrganizationRbacAuthorizer, RoleBindingServ
 from backend.core.database.database import DatabaseManager
 from backend.core.database.models import EndpointCredentialRecord, EndpointRecord, EnrollmentRecord
 from backend.domain.endpoint import Endpoint, EndpointId, EndpointStatus, PlatformInfo
-from backend.domain.organization import OrganizationId
+from backend.domain.organization import Organization, OrganizationId
 from backend.domain.security import SecurityPrincipal
 from backend.infrastructure.persistence.in_memory_endpoint_repository import InMemoryEndpointRepository
 from backend.infrastructure.persistence.in_memory_enrollment_repository import InMemoryEnrollmentRepository
@@ -28,6 +28,7 @@ from backend.infrastructure.persistence.in_memory_security_audit_repository impo
 from backend.infrastructure.persistence.in_memory_user_repository import InMemoryUserRepository
 from backend.infrastructure.persistence.sqlalchemy_endpoint_repository import SQLAlchemyEndpointRepository
 from backend.infrastructure.persistence.sqlalchemy_enrollment_repository import SQLAlchemyEnrollmentRepository
+from backend.infrastructure.persistence.sqlalchemy_organization_repository import SQLAlchemyOrganizationRepository
 from backend.infrastructure.transport.http.server import create_agent_http_app
 from backend.domain.enrollment import EnrollmentRequest
 from backend.application.ports.agent_transport import PresentedCredential
@@ -56,6 +57,7 @@ def test_http_bootstrap_is_single_use_tenant_bound_and_requires_approval(tmp_pat
     repository = SQLAlchemyEnrollmentRepository(manager)
     service = EnrollmentService(repository)
     organization_id = OrganizationId.new()
+    SQLAlchemyOrganizationRepository(manager).add(Organization(organization_id, "Bootstrap tenant"))
     authorization, token = service.create_enrollment_authorization(organization_id=organization_id, now=now)
     client = TestClient(create_agent_http_app(None, service))
     url = "/api/v1/agent/enroll"
@@ -253,7 +255,9 @@ def test_concurrent_sql_redemption_issues_exactly_one_endpoint(tmp_path):
 def test_pending_agent_can_identify_but_cannot_acknowledge_work():
     repository = InMemoryEnrollmentRepository()
     service = EnrollmentService(repository)
-    authorization, token = service.create_enrollment_authorization(organization_id=OrganizationId.new())
+    organization = Organization(OrganizationId.new(), "Pending tenant")
+    repository.register_organization(organization)
+    authorization, token = service.create_enrollment_authorization(organization_id=organization.organization_id)
     endpoint, credential, raw = service.accept_enrollment(
         authorization.enrollment_id, token.value, EnrollmentRequest("pending-agent", PlatformInfo("Windows")))
     authenticator = CredentialEndpointAuthenticator(service)
