@@ -46,7 +46,7 @@ import {
 } from "../lib/domain";
 import { DASH, formatDateTime, formatDuration, formatRelative, shortId } from "../lib/format";
 import { KNOWN_SCANNERS, scannerName } from "../lib/scanners";
-import type { Assessment, AssessmentState, FindingDetail } from "../types/api";
+import type { Assessment, AssessmentState, FindingDetail, ScannerResultSummary } from "../types/api";
 import { ScannerPicker } from "./Fleet";
 import { AnalystPanel } from "./Analyst";
 
@@ -356,6 +356,24 @@ function Composer({
 
 /* ---------------------------------------------------------------- detail */
 
+function ScannerCollectionBadge({ result }: { result: ScannerResultSummary }) {
+  if (result.status === "incompatible") {
+    return <Badge tone="warn">UNSUPPORTED · Collection unavailable</Badge>;
+  }
+  if (result.status === "skipped") {
+    return <Badge tone="neutral">Not collected</Badge>;
+  }
+  if (result.status === "failed" && result.error === "READ_FAILED") {
+    return <Badge tone="critical">READ_FAILED · Collection failed</Badge>;
+  }
+  if (result.status === "success" && result.error === null) {
+    return result.finding_count > 0
+      ? <Badge tone="warn">Security finding detected</Badge>
+      : <Badge tone="ok">Successfully collected</Badge>;
+  }
+  return <Badge tone="critical">COLLECTION_FAILED · Collection status unavailable</Badge>;
+}
+
 function AssessmentDetailView({
   organizationId,
   assessmentId,
@@ -495,20 +513,25 @@ function AssessmentDetailView({
                 ) : detail.error ? (
                   <ErrorState error={detail.error} onRetry={detail.reload} />
                 ) : detail.data && detail.data.scanner_results.length ? (
-                  <ul className="scanner-results">
+                  <>
+                  {detail.data.scanner_results.some((result) => result.status !== "success" || result.error !== null) && (
+                    <p className="panel-note" role="status">
+                      Collection is incomplete. Confirmed findings remain visible; uncollected settings remain unknown.
+                    </p>
+                  )}
+                  <ul className="scanner-results" aria-label="Scanner execution">
                     {detail.data.scanner_results.map((result, index) => (
                       <li key={`${result.scanner_id ?? index}`}>
                         <div>
                           <strong>{scannerName(result.scanner_id)}</strong>
                           <small className="mono">{result.scanner_id ?? DASH}</small>
                         </div>
-                        <Badge tone={result.error ? "critical" : "ok"}>
-                          {result.error ?? result.status ?? "unknown"}
-                        </Badge>
+                        <ScannerCollectionBadge result={result} />
                         <span className="scanner-count">{result.finding_count} findings</span>
                       </li>
                     ))}
                   </ul>
+                  </>
                 ) : (
                   <Empty
                     compact

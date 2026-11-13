@@ -46,6 +46,8 @@ foreach ($basePath in @($env:ProgramFiles, $env:ProgramData)) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'release-integrity.ps1')
+$release = Assert-VerifiedRelease $repoRoot
 $installParent = Join-Path $env:ProgramFiles 'RavenX'
 $installRoot = Join-Path $env:ProgramFiles 'RavenX\Agent'
 $dataRoot = Join-Path $env:ProgramData 'RavenX\agent'
@@ -81,6 +83,10 @@ function Assert-NoUntrustedWrite([string]$Path) {
     $acl = Get-Acl -LiteralPath $Path
     $trusted = @('S-1-3-0', 'S-1-5-18', 'S-1-5-32-544',
         'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSid -notin $trusted) {
+        throw "Installation path has an unauthorized owner: $Path"
+    }
     $writeMask = [int][Security.AccessControl.FileSystemRights]::WriteData -bor `
         [int][Security.AccessControl.FileSystemRights]::AppendData -bor `
         [int][Security.AccessControl.FileSystemRights]::WriteAttributes -bor `
@@ -154,13 +160,30 @@ Assert-NoUntrustedWrite $launcher
 # A per-user Python 3.13 does not disqualify one protected system interpreter.
 . (Join-Path $PSScriptRoot 'runtime-selection.ps1')
 $basePython = Select-RavenXPython313 -Launcher $launcher -ProgramFiles $env:ProgramFiles -ProtectedTreeCommand 'Assert-NoUntrustedWriteTree'
+$runtime = & $basePython -I -c 'import platform,sys; print("{0}|{1}|{2}".format(sys.version_info.major,sys.version_info.minor,platform.machine()))'
+if ($LASTEXITCODE -ne 0 -or $runtime -ne '3|13|AMD64') {
+    throw 'A protected Windows AMD64 Python 3.13 runtime is required.'
+}
+& $basePython -I (Join-Path $repoRoot 'backend\agent\trust.py') --server $ServerUrl --ca-cert $CaCertPath `
+    --expected-ca-sha256 $CaCertSha256
+if ($LASTEXITCODE -ne 0) { throw 'Omen HTTPS trust verification failed before installation.' }
 Protect-CodeDirectory $installParent
 Protect-CodeDirectory $installRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'backend') -Destination (Join-Path $installRoot 'backend') -Recurse
-Copy-Item -LiteralPath (Join-Path $repoRoot 'requirements-agent.txt') -Destination $installRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'requirements-agent-lock.txt') -Destination $installRoot
+foreach ($entry in @($release.files)) {
+    if ($entry.path -notlike 'backend/*' -and $entry.path -ne 'requirements-agent-lock.txt') { continue }
+    $target = Join-Path $installRoot ($entry.path.Replace('/', '\'))
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ine [string]$entry.sha256) {
+        throw 'Copied agent code differs from the verified release.'
+    }
+}
 & $basePython -I -m venv (Join-Path $installRoot 'venv')
 if ($LASTEXITCODE -ne 0) { throw 'Python virtual environment creation failed.' }
-& $agentPython -E -s -m pip install --disable-pip-version-check -r (Join-Path $installRoot 'requirements-agent.txt')
+& $agentPython -E -s -m pip install --disable-pip-version-check --no-index --no-cache-dir `
+    --only-binary=:all: --require-hashes --find-links (Join-Path $repoRoot 'wheels') `
+    -r (Join-Path $installRoot 'requirements-agent-lock.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Agent dependency installation failed.' }
 
 Push-Location $installRoot
@@ -180,6 +203,17 @@ try {
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
         -Description 'RAVEN-X outbound Windows endpoint agent' | Out-Null
+    $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    if ($registered.Principal.UserId -notin @('SYSTEM', 'S-1-5-18') -or
+        $registered.Principal.RunLevel -ne 'Highest' -or
+        @($registered.Actions).Count -ne 1 -or
+        $registered.Actions[0].Execute -ine $agentPython -or
+        $registered.Actions[0].WorkingDirectory -ine $installRoot -or
+        $registered.Actions[0].Arguments -cne $arguments -or
+        $registered.Settings.DisallowStartIfOnBatteries -or
+        $registered.Settings.StopIfGoingOnBatteries) {
+        throw 'Registered agent task differs from the expected SYSTEM configuration.'
+    }
     if (-not $NoStart) { Start-ScheduledTask -TaskName $taskName }
 } finally {
     Pop-Location

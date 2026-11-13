@@ -8,6 +8,7 @@ Windows agent uses its protected Windows state store instead.
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import platform
+import json
 from pathlib import Path
 import secrets
 import socket
@@ -23,9 +24,9 @@ import uvicorn
 from fastapi import FastAPI
 
 from backend.agent.runtime import AgentConfig, AgentCredential, InMemoryAgentCredentialStore, InMemoryAgentIdentityStore, RavenXAgent
-from backend.agent.windows_scanners import windows_read_only_scanners
+from backend.agent.windows_scanners import WindowsReadOnlyScanner, windows_read_only_scanners
 from backend.api.human_control_plane import HumanControlPlaneDependencies, create_human_control_plane_router
-from backend.application.agent.processor import AgentMessageProcessor, CredentialEndpointAuthenticator, TypedMessageRouter
+from backend.application.agent.processor import AgentMessageProcessor, CredentialEndpointAuthenticator, TypedMessageRouter, decode_payload
 from backend.application.assessment.local_orchestrator import LocalAssessmentOrchestrator
 from backend.application.assessment.tenant_service import TenantAssessmentService
 from backend.application.control_plane import AgentSessionRegistry, ControlPlaneAgentHandlers, RemoteAssessmentDispatcher
@@ -36,7 +37,8 @@ from backend.application.identity import HumanAuthenticationService, HumanIdenti
 from backend.application.organization import OrganizationContextResolver, OrganizationMembershipService, OrganizationService
 from backend.application.rbac import OrganizationRbacAuthorizer, RoleBindingService, RoleService
 from backend.application.reporting.fleet_report import TenantFleetReportService
-from backend.application.scanner.local_capabilities import LocalTargetCapabilityProvider
+from backend.application.reporting.detail import TenantAssessmentDetailService
+from backend.application.scanner.local_capabilities import LocalTargetCapabilityProvider, StaticTargetCapabilityProvider
 from backend.application.scanner.registry import ScannerRegistry
 from backend.core.database.database import DatabaseManager
 from backend.core.database.models import EndpointCredentialRecord
@@ -44,6 +46,8 @@ from backend.cli import generate_local_tls
 from backend.domain.endpoint import EndpointId
 from backend.domain.enrollment import CredentialId
 from backend.domain.security import SecurityPrincipal
+from backend.domain.scanner import ScannerCapability, TargetCapabilities
+from backend.protocol.agent import AgentMessageEnvelope, AgentMessageType
 from backend.infrastructure.persistence.in_memory_membership_repository import InMemoryOrganizationMembershipRepository
 from backend.infrastructure.persistence.in_memory_organization_repository import InMemoryOrganizationRepository
 from backend.infrastructure.persistence.in_memory_rbac_repository import InMemoryRoleBindingRepository, InMemoryRoleRepository
@@ -94,7 +98,7 @@ def _https_server(app, cert_path, key_path):
         assert not thread.is_alive(), "loopback TLS server failed to stop"
 
 
-def _isolated_app(tmp_path):
+def _isolated_app(tmp_path, *, with_foreign_scope=False):
     db_path = tmp_path / "golden-path.db"
     config_path = tmp_path / "golden-path.yaml"
     config_path.write_text("database:\n  type: sqlite\n  sqlite_path: '%s'\n" % db_path.as_posix(), encoding="utf-8")
@@ -130,6 +134,14 @@ def _isolated_app(tmp_path):
     ])
     RoleBindingService(bindings, roles, memberships).create(organization.organization_id,
                                                              membership.membership_id, role.role_id)
+    foreign = None
+    if with_foreign_scope:
+        foreign = OrganizationService(organizations).create("Independent foreign tenant")
+        other_membership = OrganizationMembershipService(memberships, organizations, users).create(
+            owner.user_id, foreign.organization_id)
+        other_role = RoleService(roles).create(foreign.organization_id, "Foreign reader", ["assessment.read"])
+        RoleBindingService(bindings, roles, memberships).create(foreign.organization_id,
+                                                               other_membership.membership_id, other_role.role_id)
     authorizer = OrganizationRbacAuthorizer(membership_repository=memberships,
         role_binding_repository=bindings, role_repository=roles, organization_repository=organizations,
         endpoint_repository=endpoint_repository)
@@ -153,7 +165,9 @@ def _isolated_app(tmp_path):
         TenantEndpointService(endpoint_repository, authorizer), tenant_assessments,
         organizations, memberships,
         enrollment_service=TenantEnrollmentService(enrollment_repository, authorizer),
+        assessment_detail_service=TenantAssessmentDetailService(endpoint_repository, assessment_repository, authorizer),
     )), prefix="/api/v1")
+    app.state.foreign_organization_id = str(foreign.organization_id) if foreign is not None else None
     return app, db, organization, owner, context_resolver, report_service
 
 
@@ -305,3 +319,128 @@ def test_verified_https_windows_read_only_golden_path(tmp_path):
                 agent.stop()
                 transport.close()
     db.close()
+
+
+def test_partial_uac_finding_survives_authenticated_https_persistence_and_detail_api(tmp_path):
+    """Synthetic registry observations; real orchestration, TLS, auth and SQLite."""
+    ca_path, cert_path, key_path = _certificates(tmp_path)
+    trust = ssl.create_default_context(cafile=str(ca_path))
+    trust.verify_flags |= ssl.VERIFY_X509_STRICT
+    app, db, organization, owner, resolver, report_service = _isolated_app(tmp_path, with_foreign_scope=True)
+    canary = "PHASE1AB_SECRET_CANARY"
+    try:
+        with _https_server(app, cert_path, key_path) as base_url:
+            config = HttpTransportConfig(base_url, verify=trust, timeout_seconds=30)
+            with httpx.Client(verify=trust, trust_env=False, timeout=30) as human:
+                login = human.post(base_url + "/api/v1/auth/login", json={
+                    "email": "golden-owner@example.com", "password": "GOLDEN_PASSWORD_SENTINEL"})
+                assert login.status_code == 200
+                headers = {"Authorization": "Bearer " + login.json()["session_token"]}
+                tenant = f"{base_url}/api/v1/organizations/{organization.organization_id}"
+                issued = human.post(tenant + "/enrollment-tokens", headers=headers,
+                                    json={"ttl_minutes": 10, "label": "synthetic partial collector"})
+                assert issued.status_code == 201
+                token = issued.json()
+                enrollment = HttpAgentEnrollmentClient(config)
+                try:
+                    grant = enrollment.enroll(enrollment_id=token["enrollment_id"],
+                        bootstrap_token=token["enrollment_token"], hostname="SYNTHETIC-PARTIAL-UAC",
+                        platform_name="Windows", platform_version="synthetic", architecture="AMD64",
+                        agent_version="1.0.0", protocol_version="1.0", request_id=str(uuid4()), nonce=str(uuid4()))
+                finally:
+                    enrollment.close()
+                assert grant.status == "new"
+                assert human.post(tenant + f"/endpoints/{grant.endpoint_id}/approve", headers=headers).status_code == 200
+
+                def registry_read(name):
+                    if name == "PromptOnSecureDesktop":
+                        raise PermissionError(canary)
+                    return {"EnableLUA": 0, "ConsentPromptBehaviorAdmin": 2}[name]
+
+                manifest = next(x.manifest for x in windows_read_only_scanners() if x.manifest.scanner_id == "windows.uac")
+                scanner = WindowsReadOnlyScanner(manifest, registry_reader=registry_read)
+                registry = ScannerRegistry((scanner,))
+                capabilities = StaticTargetCapabilityProvider(TargetCapabilities(frozenset({ScannerCapability("windows.registry.read")})))
+                credentials = InMemoryAgentCredentialStore(AgentCredential(CredentialId(grant.credential_id), grant.credential_secret))
+
+                class RecordingTransport(HttpAgentTransport):
+                    def __init__(self):
+                        super().__init__(config, credentials, endpoint_id=grant.endpoint_id)
+                        self.results = []
+
+                    def send(self, envelope):
+                        if envelope.message_type is AgentMessageType.ASSESSMENT_RESULT:
+                            self.results.append(envelope)
+                        return super().send(envelope)
+
+                transport = RecordingTransport()
+                agent = RavenXAgent(config=AgentConfig(hostname="SYNTHETIC-PARTIAL-UAC", platform="Windows"),
+                    identity_store=InMemoryAgentIdentityStore(grant.endpoint_id), credential_store=credentials,
+                    capability_provider=capabilities, scanner_registry=registry,
+                    assessment_orchestrator=LocalAssessmentOrchestrator(registry, capabilities.capabilities_for), sender=transport)
+                try:
+                    assert agent.start().value == "ready"
+                    agent.emit_startup_messages()
+                    requested = human.post(tenant + "/assessments", headers=headers,
+                        json={"endpoint_id": str(grant.endpoint_id), "scanner_ids": ["windows.uac"]})
+                    assert requested.status_code == 200
+                    assessment_id = requested.json()["assessment_id"]
+                    work = transport.poll_work()
+                    assert work is not None
+                    result = agent.receive_leased_work(work)
+                    assert len(result.findings) == 1
+                    assert len(transport.results) == 1
+                    envelope = AgentMessageEnvelope.from_dict(json.loads(json.dumps(transport.results[0].to_dict())))
+                    decoded = decode_payload(envelope.message_type, envelope.payload)
+                    assert decoded.findings[0]["title"] == "UAC Disabled"
+                    assert decoded.findings[0]["severity"] == "high"
+                    assert decoded.scanner_results[0]["status"] == "failed"
+                    assert decoded.scanner_results[0]["execution_evidence"]["completeness"] == "partial"
+                    assert decoded.scanner_results[0]["execution_evidence"]["rules_completed"] == []
+                    assert canary not in json.dumps(envelope.to_dict())
+
+                    # A credential is still mandatory even when the payload contains a finding.
+                    denied = human.post(base_url + "/api/v1/agent/messages", json=envelope.to_dict(),
+                                        headers={"Authorization": "Bearer invalid-fixture-credential"})
+                    assert denied.status_code == 401
+                    with pytest.raises(HttpTransportError) as replay:
+                        transport.send(envelope)
+                    assert replay.value.status_code == 409
+
+                    details_url = tenant + f"/assessments/{assessment_id}/details"
+                    response = human.get(details_url, headers=headers)
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["total_findings"] == 1
+                    finding = data["findings"][0]
+                    assert finding["title"] == "UAC Disabled" and finding["severity"] == "high"
+                    assert data["scanner_results"] == [{"scanner_id": "windows.uac", "status": "failed",
+                                                       "finding_count": 1, "error": "READ_FAILED"}]
+                    finding_url = tenant + f"/assessments/{assessment_id}/findings/{finding['occurrence_id']}"
+                    assert human.get(finding_url, headers=headers).json()["occurrence_id"] == finding["occurrence_id"]
+                    assert human.get(details_url).status_code == 401
+                    foreign = f"{base_url}/api/v1/organizations/{app.state.foreign_organization_id}"
+                    assert human.get(foreign + f"/assessments/{assessment_id}/details", headers=headers).status_code == 404
+                    assert human.get(foreign + f"/assessments/{assessment_id}/findings/{finding['occurrence_id']}", headers=headers).status_code == 404
+                    assert canary not in response.text
+
+                    # Read the actual persisted result through a new database manager.
+                    reopened = DatabaseManager(str(db.config_path))
+                    reopened.initialize_sync_engine()
+                    try:
+                        stored = SQLAlchemyRemoteAssessmentRepository(reopened).get(assessment_id)
+                        assert len(stored.result.findings) == 1
+                        assert stored.result.findings[0]["occurrence_id"] == finding["occurrence_id"]
+                        assert stored.result.scanner_results[0]["status"] == "failed"
+                    finally:
+                        reopened.close()
+                    context = resolver.resolve(SecurityPrincipal.human(owner.user_id), organization.organization_id)
+                    fleet = report_service.build(SecurityPrincipal.human(owner.user_id), context,
+                        endpoint_id=grant.endpoint_id, assessment_ids=(assessment_id,))
+                    assert fleet["endpoints"][0]["scan_status"] == "partial"
+                    assert fleet["endpoints"][0]["partial_evidence"] is True
+                finally:
+                    agent.stop()
+                    transport.close()
+    finally:
+        db.close()

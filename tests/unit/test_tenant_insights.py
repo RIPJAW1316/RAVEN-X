@@ -142,7 +142,7 @@ def test_fleet_report_counts_real_scanned_failed_pending_and_unscanned_endpoints
                                         "scanner_id": "windows.firewall", "evidence": [evidence],
                                         "powershell": "DO_NOT_EXPOSE"},),
                              scanner_results=({"scanner_id": "windows.firewall", "status": "success",
-                                               "findings": ["f-1"]},))
+                                               "findings": ["f-1"], "execution_evidence": {"completeness": "complete"}},))
     world.assessments.items.extend((
         _assessment(scanned, org, "scan-1", "completed", NOW, result=result),
         _assessment(failed, org, "scan-2", "failed", NOW),
@@ -204,7 +204,8 @@ def test_local_ai_uses_only_bounded_completed_evidence_and_degrades_cleanly():
                                         "title": "Firewall disabled", "description": "Review firewall",
                                         "evidence": [{"source": "firewall", "description": "Off",
                                                       "raw_metadata": {"password": "DO_NOT_EXPOSE"}}]},),
-                             scanner_results=({"scanner_id": "windows.firewall", "status": "success"},))
+                             scanner_results=({"scanner_id": "windows.firewall", "status": "success",
+                                               "execution_evidence": {"completeness": "complete"}},))
     world.assessments.items.append(_assessment(endpoint, org, "scan-ai", "completed", NOW, result=result))
     path = f"/api/v1/organizations/{org}/ai/analyze"
     response = world.client.post(path, json={"endpoint_id": str(endpoint.endpoint_id)}, headers=_headers(world))
@@ -284,6 +285,43 @@ def test_completed_assessment_with_skipped_scanner_is_partial_not_clean():
     assert json.loads(world.provider.prompts[0])["scanned_endpoints"][0]["scan_status"] == "partial"
 
 
+@pytest.mark.parametrize("anomaly", [
+    {},
+    {"execution_evidence": {"completeness": "partial"}},
+    {"error": "SECRET_CANARY"},
+    {"error_category": "READ_FAILED"},
+])
+def test_fleet_report_does_not_call_inconsistent_success_fully_scanned(anomaly):
+    world = _world()
+    org = world.organization.organization_id
+    endpoint = Endpoint(EndpointId.new(), "incomplete-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
+                        created_at=NOW, organization_id=org)
+    world.endpoints.add(endpoint)
+    scanner_result = {"scanner_id": "windows.firewall", "status": "success", "findings": [], **anomaly}
+    result = SimpleNamespace(status="completed", findings=(), scanner_results=(scanner_result,))
+    world.assessments.items.append(_assessment(endpoint, org, "incomplete-1", "completed", NOW, result=result))
+    report = world.client.get(f"/api/v1/organizations/{org}/reports/fleet", headers=_headers(world)).json()
+    assert report["summary"]["scanned"] == 0
+    assert report["summary"]["partial"] == 1
+    assert report["endpoints"][0]["scanner_results"][0]["status"] == "unknown"
+    assert "SECRET_CANARY" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("status", ["skipped", "incompatible"])
+def test_fleet_report_does_not_count_findings_from_uncollected_scanners(status):
+    world = _world()
+    org = world.organization.organization_id
+    endpoint = Endpoint(EndpointId.new(), "uncollected-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
+                        created_at=NOW, organization_id=org)
+    world.endpoints.add(endpoint)
+    result = SimpleNamespace(status="completed", findings=(), scanner_results=(
+        {"scanner_id": "windows.firewall", "status": status, "findings": [{"title": "unconfirmed"}]},))
+    world.assessments.items.append(_assessment(endpoint, org, "uncollected-1", "completed", NOW, result=result))
+    report = world.client.get(f"/api/v1/organizations/{org}/reports/fleet", headers=_headers(world)).json()
+    assert report["endpoints"][0]["scan_status"] == "partial"
+    assert report["endpoints"][0]["scanner_results"][0]["finding_count"] == 0
+
+
 def test_completed_without_result_is_failed_and_ai_stays_unavailable():
     world = _world()
     org = world.organization.organization_id
@@ -329,7 +367,8 @@ def test_disabled_local_ai_returns_explicit_unavailable_state():
                         created_at=NOW, organization_id=org)
     world.endpoints.add(endpoint)
     result = SimpleNamespace(status="completed", findings=(), scanner_results=(
-        {"scanner_id": "windows.firewall", "status": "success"},))
+        {"scanner_id": "windows.firewall", "status": "success",
+         "execution_evidence": {"completeness": "complete"}},))
     world.assessments.items.append(_assessment(endpoint, org, "scan-disabled-ai", "completed", NOW, result=result))
     response = world.client.post(f"/api/v1/organizations/{org}/ai/analyze", json={}, headers=_headers(world))
     assert response.status_code == 200

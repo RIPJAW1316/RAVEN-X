@@ -39,7 +39,10 @@ class LocalAssessmentOrchestrator:
             findings = tuple(
                 finding
                 for result in scanner_results
-                if result.status is ScannerExecutionStatus.SUCCESS
+                # A registered local collector can confirm a violation before
+                # another read fails. Preserve that evidence without changing
+                # its FAILED status or incomplete coverage.
+                if result.status in (ScannerExecutionStatus.SUCCESS, ScannerExecutionStatus.FAILED)
                 for finding in result.findings
             )
             return AssessmentResult(
@@ -55,14 +58,14 @@ class LocalAssessmentOrchestrator:
                 },
                 scanner_results=scanner_results,
             )
-        except Exception as error:
+        except Exception:
             return AssessmentResult(
                 assessment_id=assessment_id,
                 target=target,
                 status=AssessmentStatus.FAILED,
                 started_at=started_at,
                 finished_at=datetime.utcnow(),
-                error=str(error),
+                error="local assessment execution failed",
             )
 
     def _execute_requested_scanner(
@@ -102,11 +105,11 @@ class LocalAssessmentOrchestrator:
 
         try:
             return scanner.execute(target, capabilities)
-        except Exception as error:
+        except Exception:
             return ScannerExecutionResult(
                 scanner_id=scanner_id,
                 status=ScannerExecutionStatus.FAILED,
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
-                error=str(error),
+                error="local scanner execution failed",
             )

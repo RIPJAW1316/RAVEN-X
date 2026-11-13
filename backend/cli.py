@@ -207,6 +207,8 @@ def main(argv=None) -> int:
             item.add_argument("--target-schema", type=int, default=1)
         elif command == "serve":
             item.add_argument("--host", default="127.0.0.1")
+            item.add_argument("--listen-host", action="append", default=[],
+                              help="Explicit listeners: 127.0.0.1 then one RFC1918 LAN IP")
             item.add_argument("--port", type=int, default=8443)
             item.add_argument("--cert", type=Path)
             item.add_argument("--key", type=Path)
@@ -281,8 +283,10 @@ def main(argv=None) -> int:
             finally:
                 database.close()
         else:
+            from .application.ops.listeners import bind_sockets, validated_hosts
+            hosts = args.listen_host or [args.host]
             if args.local_http:
-                if args.host not in {"127.0.0.1", "::1", "localhost"}:
+                if hosts != ["127.0.0.1"]:
                     raise ValueError("local HTTP is restricted to loopback")
                 cert = key = None
                 os.environ["RAVENX_ENVIRONMENT"] = "development"
@@ -295,13 +299,25 @@ def main(argv=None) -> int:
                     verify_directory(data_dir)
                     verify_protected_file(key.absolute())
                 os.environ["RAVENX_ENVIRONMENT"] = "production"
+            validated_hosts(hosts, cert)
             os.environ["RAVENX_SERVE_FRONTEND"] = "true"
             os.environ["RAVENX_SERVER_WORKERS"] = "1"
             os.environ.setdefault("RAVENX_PRESENCE_MAINTENANCE_ENABLED", "true")
             import uvicorn
-            uvicorn.run("backend.api.main:app", host=args.host, port=args.port, workers=1,
-                        ssl_certfile=str(cert) if cert else None, ssl_keyfile=str(key) if key else None,
-                        proxy_headers=False, server_header=False)
+            if len(hosts) == 1:
+                uvicorn.run("backend.api.main:app", host=hosts[0], port=args.port, workers=1,
+                            ssl_certfile=str(cert) if cert else None, ssl_keyfile=str(key) if key else None,
+                            proxy_headers=False, server_header=False)
+            else:
+                config = uvicorn.Config("backend.api.main:app", workers=1,
+                                        ssl_certfile=str(cert), ssl_keyfile=str(key),
+                                        proxy_headers=False, server_header=False)
+                sockets = bind_sockets(tuple(hosts), args.port)
+                try:
+                    uvicorn.Server(config).run(sockets=sockets)
+                finally:
+                    for listener in sockets:
+                        listener.close()
         return 0
     except (ValueError, OSError, WindowsFileSecurityError) as error:
         parser.exit(2, f"RAVEN-X: {error}\n")

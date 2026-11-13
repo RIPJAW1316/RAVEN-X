@@ -985,6 +985,40 @@ def verify_protected_file(path) -> Path:
     return file_path
 
 
+def verify_protected_child_file(path) -> Path:
+    """Verify a file inheriting only SYSTEM/Administrators from a protected parent.
+
+    SQLite creates its database with inherited access rules under the installed
+    protected data directory. This accepts that existing custody without
+    changing the file ACL, while rejecting any extra principal or reparse point.
+    Private keys should continue to use ``verify_protected_file``.
+    """
+    file_path = _absolute_local_path(path)
+    verify_directory(file_path.parent)
+    _assert_no_reparse(file_path)
+    if not file_path.is_file():
+        raise WindowsFileSecurityError("protected file does not exist")
+    win32security, ntsecuritycon = _windows_security()
+    descriptor = _security_descriptor(file_path)
+    owner = win32security.ConvertSidToStringSid(descriptor.GetSecurityDescriptorOwner())
+    if owner not in _ALLOWED:
+        raise WindowsFileSecurityError("protected file has an untrusted owner")
+    dacl = descriptor.GetSecurityDescriptorDacl()
+    if dacl is None or dacl.GetAceCount() != 2:
+        raise WindowsFileSecurityError("protected file has unexpected access rules")
+    seen = set()
+    for index in range(2):
+        header, mask, sid = _read_ace(dacl, index)
+        identity = win32security.ConvertSidToStringSid(sid)
+        if (header[0] != win32security.ACCESS_ALLOWED_ACE_TYPE or identity not in _ALLOWED
+                or identity in seen or mask & ntsecuritycon.FILE_ALL_ACCESS != ntsecuritycon.FILE_ALL_ACCESS):
+            raise WindowsFileSecurityError("protected file grants unexpected access")
+        seen.add(identity)
+    if seen != _ALLOWED:
+        raise WindowsFileSecurityError("protected file lacks SYSTEM or Administrators access")
+    return file_path
+
+
 def atomic_write_protected(path, contents: bytes) -> None:
     """Write bytes in a verified directory, protect temp, then atomically swap."""
     if not isinstance(contents, bytes):

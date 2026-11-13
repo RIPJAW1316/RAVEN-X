@@ -54,3 +54,54 @@ def test_detail_service_roots_occurrence_in_assessment_and_redacts_evidence():
     assert service.get_finding(SecurityPrincipal.human(context.user_id), context, "assessment", occurrence).occurrence_id == occurrence
     with pytest.raises(KeyError):
         service.get_finding(SecurityPrincipal.human(context.user_id), context, "assessment", str(FindingOccurrenceId.derived("other", 0)))
+
+
+@pytest.mark.parametrize("status,category,error,expected_status,label", [
+    ("success", None, None, "success", None),
+    ("failed", "READ_FAILED", "SECRET_CANARY", "failed", "READ_FAILED"),
+    ("incompatible", "UNSUPPORTED", "SECRET_CANARY", "incompatible", "UNSUPPORTED"),
+    ("incompatible", None, "SECRET_CANARY", "incompatible", "UNSUPPORTED"),
+    ("skipped", None, "SECRET_CANARY", "skipped", "NOT_COLLECTED"),
+    ("failed", "UNSUPPORTED", "SECRET_CANARY", "failed", "COLLECTION_FAILED"),
+    ("failed", {"SECRET_CANARY": 1}, ["SECRET_CANARY"], "failed", "COLLECTION_FAILED"),
+    ("success", None, "SECRET_CANARY", "unknown", "COLLECTION_FAILED"),
+    ("success", "SECRET_CANARY", None, "unknown", "COLLECTION_FAILED"),
+    ("SECRET_CANARY", None, None, "unknown", "COLLECTION_FAILED"),
+    (None, None, None, "unknown", "COLLECTION_FAILED"),
+    (["SECRET_CANARY"], None, None, "unknown", "COLLECTION_FAILED"),
+])
+def test_detail_collection_labels_are_fixed_and_never_include_raw_errors(status, category, error, expected_status, label):
+    org = OrganizationId.new()
+    endpoint = Endpoint(EndpointId.new(), "test", PlatformInfo("Windows"), created_at=NOW, organization_id=org)
+    endpoints = InMemoryEndpointRepository(); endpoints.add(endpoint)
+    assessments = InMemoryRemoteAssessmentRepository()
+    result = AssessmentResultPayload("assessment", str(endpoint.endpoint_id), AssessmentStatus.COMPLETED, NOW, NOW,
+        (), ({"scanner_id": "windows.bitlocker", "status": status, "error_category": category,
+              "error": error, "findings": [],
+              "execution_evidence": {"completeness": "complete"} if status == "success" and category is None and error is None else None},))
+    assessments.add(RemoteAssessment("assessment", endpoint.endpoint_id, CorrelationId(), ("windows.bitlocker",), NOW,
+        RemoteAssessmentState.COMPLETED, organization_id=org, result=result))
+    context = OrganizationContext(org, "membership", UserId.new())
+    service = TenantAssessmentDetailService(endpoints, assessments, Allow())
+    data = service.get_detail(SecurityPrincipal.human(context.user_id), context, "assessment").to_dict()
+    assert data["scanner_results"] == [{"scanner_id": "windows.bitlocker", "status": expected_status,
+                                       "finding_count": 0, "error": label}]
+    assert "SECRET_CANARY" not in str(data)
+
+
+@pytest.mark.parametrize("evidence", [None, {"completeness": "partial"}, {"completeness": "unknown"}])
+def test_detail_does_not_call_unproven_success_healthy(evidence):
+    org = OrganizationId.new()
+    endpoint = Endpoint(EndpointId.new(), "test", PlatformInfo("Windows"), created_at=NOW, organization_id=org)
+    endpoints = InMemoryEndpointRepository(); endpoints.add(endpoint)
+    assessments = InMemoryRemoteAssessmentRepository()
+    result = AssessmentResultPayload("assessment", str(endpoint.endpoint_id), AssessmentStatus.COMPLETED, NOW, NOW,
+        (), ({"scanner_id": "windows.firewall", "status": "success", "error": None,
+              "execution_evidence": evidence, "findings": []},))
+    assessments.add(RemoteAssessment("assessment", endpoint.endpoint_id, CorrelationId(), ("windows.firewall",), NOW,
+        RemoteAssessmentState.COMPLETED, organization_id=org, result=result))
+    context = OrganizationContext(org, "membership", UserId.new())
+    data = TenantAssessmentDetailService(endpoints, assessments, Allow()).get_detail(
+        SecurityPrincipal.human(context.user_id), context, "assessment").to_dict()
+    assert data["scanner_results"] == [{"scanner_id": "windows.firewall", "status": "unknown",
+                                        "finding_count": 0, "error": "COLLECTION_FAILED"}]

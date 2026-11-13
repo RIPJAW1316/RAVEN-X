@@ -123,7 +123,7 @@ def test_capability_provider_exception_is_an_explicit_orchestration_failure():
         (),
     )
 
-    assert result.error == "discovery failed"
+    assert result.error == "local assessment execution failed"
     assert result.finished_at is not None
 
 

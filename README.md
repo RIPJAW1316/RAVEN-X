@@ -1,375 +1,187 @@
-# 🔒 RAVEN-X Enterprise Security Platform v4.0
-
-> **AI-Powered Windows Vulnerability Scanner & Auto-Remediation Engine**
-
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
-[![License](https://img.shields.io/badge/License-Educational-red.svg)]()
-
----
-
-## 🚀 What is RAVEN-X?
-
-RAVEN-X is a **next-generation security platform** that combines:
-
-- ✅ **Comprehensive Vulnerability Scanning** - 20+ security modules
-- 🤖 **AI-Powered Threat Detection** - ML-based malware detection & zero-day heuristics
-- 🔧 **Automated Remediation** - One-click security fixes
-- 📊 **Professional Reporting** - HTML, PDF, JSON, CSV, DOCX
-- 👁️ **Real-time Behavioral Monitoring** - Detect attacks as they happen
-- 🧠 **Self-Learning Engine** - Gets smarter with every scan
-
----
-
-## 🎯 Features
-
-### 🔍 Advanced Scanning
-- Windows Updates & Patches
-- Firewall Configuration
-- Antivirus Status
-- User Account Control (UAC)
-- Remote Desktop Security
-- Network Ports & Services
-- BitLocker Encryption
-- Password Policies
-- PowerShell Execution Policy
-- SMB Protocol Vulnerabilities
-- Registry Analysis
-- Memory-based Threats
-- Rootkit Detection
-- Privilege Escalation Vectors
-- **...and 10+ more!**
-
-### 🤖 AI & Machine Learning
-- **Local LLM Integration** (LM Studio)
-- ML-based malware classification
-- Anomaly detection
-- Pattern learning from scans
-- User feedback learning
-- Zero-day heuristics
-
-### 🔧 Auto-Remediation
-- One-click vulnerability fixes
-- System restore point creation
-- Safe mode with rollback
-- PowerShell script generation
-- Detailed execution logs
-
-### 📊 Reporting
-- **HTML** - Beautiful interactive reports
-- **PDF** - Executive summaries
-- **JSON** - Machine-readable data
-- **CSV** - Spreadsheet import
-- **DOCX** - Word documents
-
----
-
-## 📦 Installation
-
-### Quick Start (One Command)
-```bash
-# Clone repository
-git clone https://github.com/yourusername/raven-x-enterprise.git
-cd raven-x-enterprise
-
-# First-time setup
-python run.py --mode setup
-
-# Launch everything
-python run.py --mode all
-```
-
-### Manual Installation
-```bash
-# 1. Install Python 3.8+
-# Download from: https://www.python.org/
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Initialize database
-python -c "from backend.core.database.database import db_manager; db_manager.initialize_sync_engine(); db_manager.create_tables()"
-
-# 4. Run
-python run.py --mode all
-```
-
-### Docker Installation
-```bash
-# Build and run with Docker Compose
-docker-compose up -d
-
-# Access API at http://localhost:8000
-# Access docs at http://localhost:8000/api/docs
-```
-
----
-
-## 🎮 Usage
-
-### GUI Mode (Recommended)
-```bash
-python run.py --mode all
-```
-
-This launches:
-- 🖥️ **Desktop GUI** - Professional CustomTkinter interface
-- 🌐 **REST API** - Backend services on port 8000
-- 📡 **WebSocket** - Real-time updates
-
-### API Mode (Headless)
-```bash
-python run.py --mode backend
-```
-
-Access the API at: `http://localhost:8000/api/docs`
-
-### Command Line
-```python
-from backend.core.scanner.enhanced_scanner import EnhancedScanner
-
-# Create scanner
-scanner = EnhancedScanner()
-
-# Run scan
-import asyncio
-vulnerabilities = asyncio.run(scanner.scan_all_async())
-
-# Print results
-for vuln in vulnerabilities:
-    print(f"{vuln['severity']}: {vuln['title']}")
-```
-
----
-
-## 🏗️ Architecture
-```
-raven-x-enterprise/
-├── backend/                    # Backend services
-│   ├── api/                   # FastAPI REST API
-│   │   ├── main.py           # API entry point
-│   │   └── v1/               # API endpoints
-│   │       ├── scan.py       # Scanning endpoints
-│   │       ├── analysis.py   # AI analysis
-│   │       ├── remediation.py # Auto-fix
-│   │       ├── reports.py    # Report generation
-│   │       └── system.py     # System monitoring
-│   ├── core/                  # Core functionality
-│   │   ├── scanner/          # Scanning engine
-│   │   ├── ai/               # AI/ML modules
-│   │   ├── remediation/      # Auto-fix engine
-│   │   ├── monitoring/       # Real-time monitoring
-│   │   ├── database/         # Database models
-│   │   └── reporting/        # Report generation
-│   └── services/             # Business logic
-├── frontend/                  # Frontend applications
-│   └── gui/                  # Desktop GUI
-├── ml_models/                # Trained ML models
-├── data/                     # Data storage
-├── config/                   # Configuration
-└── tests/                    # Tests
-```
-
----
-
-## 🔧 Configuration
-
-Edit `config/config.yaml`:
-```yaml
-ai:
-  lm_studio:
-    url: "http://localhost:1234/v1"
-    model: "llama-3.1-8b-instruct-q4_k_m"
-
-scanning:
-  default_scan_type: "full"
-  max_concurrent_scans: 3
-
-remediation:
-  auto_fix_enabled: false  # Safe mode
-  create_restore_point: true
-```
-
----
-
-## 📚 API Documentation
-
-### Start a Scan
-```bash
-POST /api/v1/scan/start
-{
-  "scan_type": "full",
-  "deep_scan": true,
-  "ai_analysis": true
-}
-```
-
-### Get Scan Results
-```bash
-GET /api/v1/scan/results/{scan_id}
-```
-
-### Request AI Analysis
-```bash
-POST /api/v1/analysis/analyze
-{
-  "scan_id": "...",
-  "analysis_type": "comprehensive"
-}
-```
-
-### Auto-Fix Vulnerabilities
-```bash
-POST /api/v1/remediation/fix
-{
-  "vulnerability_ids": ["..."],
-  "auto_fix": false,
-  "dry_run": true
-}
-```
-
-**Full API docs**: http://localhost:8000/api/docs
-
----
-
-## 🎓 AI Setup (Optional)
-
-### Using LM Studio
-
-1. **Download LM Studio**: https://lmstudio.ai/
-2. **Load Model**: llama-3.1-8b-instruct (or similar)
-3. **Start Server**: Enable local server on port 1234
-4. **Configure**: Update `config/config.yaml` with your model
-
-### Using OpenAI API
-
-Edit `backend/core/ai/llm_client.py`:
-```python
-self.client = OpenAI(
-    api_key="your-api-key",
-    base_url="https://api.openai.com/v1"
-)
-```
-
----
-
-## 🧪 Testing
-```bash
-# Run all tests
-pytest tests/
-
-# Run with coverage
-pytest --cov=backend tests/
-
-# Run specific test
-pytest tests/test_scanner.py
-```
-
----
-
-## 🔒 Security Notice
-
-**⚠️ IMPORTANT:**
-
-- This tool is for **authorized security testing ONLY**
-- Always get proper authorization before scanning systems
-- Auto-remediation can modify system settings
-- Create backups before applying fixes
-- Test in a controlled environment first
-- Not responsible for system damage
-
----
-
-## 📊 Screenshots
-
-### Dashboard
-![Dashboard](docs/screenshots/dashboard.png)
-
-### Scan Results
-![Scan Results](docs/screenshots/scan_results.png)
-
-### AI Analysis
-![AI Analysis](docs/screenshots/ai_analysis.png)
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
----
-
-## 📝 License
-
-**Educational Use Only**
-
-This software is provided for educational and authorized security testing purposes only.
-
----
-
-## 🎯 Roadmap
-
-- [x] Core vulnerability scanning
-- [x] AI-powered analysis
-- [x] Auto-remediation
-- [x] Real-time monitoring
-- [x] Self-learning engine
-- [ ] Web dashboard
-- [ ] Mobile app
-- [ ] Distributed scanning
-- [ ] Cloud integration
-- [ ] SIEM integration
-
----
-
-## 💪 Built With
-
-- **FastAPI** - Modern Python web framework
-- **SQLAlchemy** - Database ORM
-- **CustomTkinter** - Modern GUI framework
-- **Scikit-learn** - Machine learning
-- **LM Studio** - Local LLM inference
-- **Jinja2** - Template engine
-- **ReportLab** - PDF generation
-
----
-
-## 👥 Authors
-
-- *K Aryan Reddy*
-
----
-
-## 🙏 Acknowledgments
-
-- CustomTkinter for the amazing GUI framework
-- LM Studio for local LLM support
-- FastAPI for the incredible web framework
-- The open-source security community
-
----
-
-## 📞 Support
-- **Email**: gtagamer1316@gmail.com
----
-
-## ⭐ Star Us!
-
-If RAVEN-X helped you, please ⭐ star this repository!
-
----
-
 <div align="center">
 
-**Made with ❤️ and 🔥 by security professionals, for security professionals**
+# RAVEN-X
 
-© 2025 RAVEN-X Enterprise. All rights reserved.
+### Know what was checked. Know what was found. Know what remains unknown.
+
+**Windows security assessment by [NorthCypher](https://northcypher.tech/)**
+
+[![Status](https://img.shields.io/badge/status-controlled%20prototype-F59E0B?style=for-the-badge)](#project-status)
+[![Platform](https://img.shields.io/badge/endpoint-Windows-2563EB?style=for-the-badge)](#windows-collection)
+[![Python](https://img.shields.io/badge/server-Python%203.13-3776AB?style=for-the-badge)](#technology)
+[![React](https://img.shields.io/badge/portal-React-149ECA?style=for-the-badge)](#technology)
+
+[Overview](#what-raven-x-does) · [Architecture](#architecture) · [Status](#project-status) · [Run locally](#development-quick-start) · [Roadmap](#deployment-roadmap)
 
 </div>
 
+> [!IMPORTANT]
+> **This is a development source tree, not an accepted fleet installer.** The enterprise prototype has been exercised on one HP Omen. The Dell Vostro physical pilot, live server upgrade, complete agent recovery rehearsal, and approximately 70-PC college rollout have **not** passed their acceptance gates. A built Setup.exe or passing source test does not change that decision.
+
+## At a glance
+
+| Question | Current answer |
+| :-- | :-- |
+| **What is it?** | A local control plane and Windows endpoint agent for supervised, read-only security assessments, plus a separate preserved personal scanner. |
+| **Who uses it?** | An administrator in a browser portal; approved agents initiate outbound HTTPS connections. |
+| **Enterprise checks?** | Windows Firewall, User Account Control (UAC), SMBv1, and BitLocker. |
+| **Portal views?** | Fleet, enrollment, assessments, findings, reports, activity, schedules, groups/scopes, compliance, and optional AI Analyst. |
+| **Where does evidence go?** | To the configured local control plane. Optional loopback AI is disabled by default. |
+| **Ready for 70 PCs?** | No. A separate physical pilot and college-lab qualification remain open. |
+
+## What RAVEN-X does
+
+RAVEN-X helps an operator distinguish a **confirmed finding** from **incomplete collection**. Job completion and evidence coverage are separate: an assessment may finish while a check is unavailable or fails. Findings confirmed before a later collection failure remain visible; unsupported collection never becomes a healthy result.
+
+The current enterprise workflow:
+
+1. An administrator issues a short-lived, single-use enrollment token.
+2. A Windows agent enrolls and waits for human approval.
+3. The approved agent sends heartbeats, polls for work, and submits evidence over outbound HTTPS.
+4. A read-only assessment collects the four supported categories of Windows evidence.
+5. The organization-scoped portal presents results, findings, coverage, compliance, and audit activity.
+
+The original `scanner.py` personal edition remains a **separate local workflow**. Its broader historical scanner and remediation code must not be confused with the four-check enterprise agent or treated as enterprise auto-remediation.
+
+## Project status
+
+The preserved WS-01 baseline is commit `409f955` on `oct15-prototype`. Phase 1A-B, installer, WS-03 server-upgrade, and WS-03C recovery work followed in the development tree. Publishing a Git commit does not qualify an installed Windows release.
+
+| Area | Implemented or observed | Remaining limit |
+| :-- | :-- | :-- |
+| Personal scanner | Preserved `scanner.py` local mode | Separate from enterprise behavior |
+| Control plane | FastAPI services, organization scoping, React portal | Installed Omen server is older than current source; upgrade is gated |
+| Endpoint lifecycle | Enrollment, manual approval, heartbeat, work polling, results, credential renewal and revocation in source | Installed Windows upgrade and recovery need physical validation |
+| Assessment | Read-only Firewall, UAC, SMBv1, BitLocker collectors | More Windows editions, languages, SYSTEM execution and resource bounds need coverage |
+| Finding integrity | Confirmed findings can survive failed collection while coverage remains incomplete | Phase 1A-B is a **conditional source pass** |
+| Installer | Inno Setup `RAVEN-X-Agent-Setup.exe` 1.0.0-rc1 built and its payload checked | Unsigned; no supervised Dell installation passed |
+| Server upgrade / recovery | Source, manifests, backups, migration and synthetic checks | Full privileged rehearsal and live transitions not accepted |
+| Local AI | Optional OpenAI-compatible loopback analysis | Disabled by default; advisory only |
+| College lab | Target: approximately 70 Windows PCs | No rollout or scale acceptance |
+
+The [public release-status summary](docs/RELEASE_STATUS.md) records the acceptance boundaries. Phase 1A-B is a **conditional source pass**; WS-03C RC6e is **NO-GO** for privileged/live acceptance; the Dell–Omen pilot is **BLOCKED before installation**. Those decisions are not a fresh full-suite pass for this Git revision.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    O[Administrator] -->|Authenticated session| P[React portal]
+    P -->|Organization-scoped API| S[FastAPI control plane]
+    S <--> DB[(Local SQLite database)]
+    S --> Q[Durable assessment work]
+    A[Approved Windows agent] -->|Outbound HTTPS: heartbeat, poll, result| S
+    A --> C[Read-only Windows collectors]
+    C -->|Firewall · UAC · SMBv1 · BitLocker| A
+    S -. optional loopback .-> AI[Local LLM runtime]
+```
+
+The backend separates business contracts (`backend/domain`), use cases (`backend/application`), adapters and persistence (`backend/infrastructure`), HTTP composition (`backend/api`), agent runtime (`backend/agent`), and typed agent protocol (`backend/protocol`). The React/TypeScript portal is in `frontend/`. Legacy personal scanner modules remain isolated from the enterprise path.
+
+### Security model
+
+- **Human approval:** a token creates a pending enrollment; approval is required before work.
+- **Endpoint identity:** credentials bind an agent to an endpoint and organization; expired, revoked, or unapproved identities must fail authorization.
+- **Windows custody:** agent state uses protected storage and DPAPI. Physical recovery has its own gates.
+- **Network trust:** agent HTTPS validates CA and host identity; the installer's expected CA fingerprint must arrive independently of its bundle.
+- **Tenant boundaries:** membership and ownership checks apply through API, service, and storage paths.
+- **Replay resistance:** protocol and renewal flows use freshness controls. Source tests do not substitute for installed Windows validation.
+- **Evidence honesty:** failed/unsupported collection is explicit; job completion does not promise complete coverage.
+- **Audit trail:** security events are persisted separately from transient telemetry.
+
+See the acceptance records for exact tested cases and limits. This summary is not a third-party certification.
+
+## Windows collection
+
+| Collector | Evidence | Interpretation |
+| :-- | :-- | :-- |
+| Firewall | Windows Firewall state and coverage | Missing or failed data is not healthy |
+| UAC | User Account Control policy | Only confirmed, supported evidence becomes a finding |
+| SMBv1 | Legacy protocol exposure | Incompatible collection remains explicit |
+| BitLocker | Volume encryption | A confirmed problem may coexist with incomplete coverage |
+
+Collectors are read-only. Duplicate JSON properties and invalid constants are rejected. One open resource limit remains: subprocess output is captured before its length check. The [release-status summary](docs/RELEASE_STATUS.md) tracks this limit.
+
+## Technology
+
+| Layer | Main technology |
+| :-- | :-- |
+| API | Python 3.13, FastAPI, Pydantic |
+| Persistence | SQLAlchemy and local SQLite |
+| Portal | React 19, TypeScript, Vite, Framer Motion |
+| Windows agent | Python, PowerShell, pywin32, DPAPI, Scheduled Tasks |
+| Transport | HTTPS and typed agent messages |
+| Installer candidate | Inno Setup, pinned offline wheels, integrity manifests |
+| Optional AI | Local OpenAI-compatible runtime; disabled unless configured |
+
+Pins are in `requirements-server.txt`, `requirements-agent.txt`, `requirements-agent-lock.txt`, and `frontend/package.json`.
+
+## Repository map
+
+```text
+backend/
+  agent/             Windows host, collectors and credential state
+  api/               FastAPI routers and composition
+  application/       Enrollment, assessment, reporting and operations
+  domain/            Business models and rules
+  infrastructure/    Persistence, transport, security and AI adapters
+  protocol/          Agent message contracts
+frontend/            React portal and browser tests
+scripts/             Install, release, upgrade and rehearsal tools
+tests/               Backend unit and integration tests
+docs/operations/      Acceptance and operating documentation
+scanner.py           Preserved personal scanner entry point
+```
+
+## Development quick start
+
+> [!CAUTION]
+> Use disposable, protected local data. These commands do not install or upgrade the HP Omen or Dell. Never commit live tokens, private keys, protected database copies, or agent credentials.
+
+The enterprise development target is **Windows AMD64 with Python 3.13** and **Node.js/npm** for the portal. Build dependencies and inspect the CLI:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-server.txt
+cd frontend
+npm ci
+npm run build
+cd ..
+.\.venv\Scripts\python.exe -m backend.cli --help
+```
+
+The CLI exposes `migrate`, `bootstrap`, `tls-init`, `serve`, and `rollback-check`. A disposable **loopback-only** development server can use `.\.venv\Scripts\python.exe -m backend.cli serve --data-dir <private-test-directory> --local-http` after database initialization and administrator bootstrap. Production HTTPS enforces protected Windows storage and certificate/key ownership. Use the dedicated runbooks for real machines; do not weaken checks for an ad hoc launch.
+
+### Validation
+
+```powershell
+python -m pytest tests -q
+cd frontend
+npm run build
+npm run test:e2e
+```
+
+Some tests require Windows privileges and private test roots. Fixture browser tests do not prove real backend authentication. Phase 1A-B recorded **895 passed, 3 skipped** on Python 3.13 and **4 passed** in the fixture browser layer. Later WS-03 and WS-03C changes have separate records; the RC6e handoff explicitly says its older full-suite result is **not** RC6e evidence. Skipped privileged cases remain unverified.
+
+## Deployment roadmap
+
+```mermaid
+flowchart LR
+    A[One-machine prototype<br/>observed] --> B[Compatible Omen upgrade<br/>not accepted]
+    B --> C[Supervised Dell installer + enrollment<br/>not accepted]
+    C --> D[Two-laptop assessment + recovery<br/>not accepted]
+    D --> E[Separate 70-PC lab qualification<br/>not started]
+```
+
+1. **Freeze and authenticate a release.** Review exact source and manifests; sign artifacts or convey independent trusted digests for installer and CA.
+2. **Qualify the server upgrade.** Test protected backup, migration, TLS listeners, rollback and forward recovery in a disposable Windows environment before any live Omen change.
+3. **Qualify agent recovery.** Complete synthetic DPAPI, SYSTEM task, archive, restore, ACL and failure-recovery checks.
+4. **Run the Dell–Omen pilot.** Validate installer custody, CA pinning, enrollment, approval, heartbeats, collectors, findings, reboot, renewal and revocation on the actual Dell.
+5. **Gate the 70-PC rollout separately.** Establish inventory, network/TLS stability, operator runbooks, staged scale tests, update and recovery processes.
+
+The [release-status summary](docs/RELEASE_STATUS.md) distinguishes source readiness from physical pilot approval. Local operator runbooks contain machine-specific details and are intentionally outside this public update.
+
+## Responsible use
+
+Run RAVEN-X only on systems you own or are authorized to assess. This repository should contain source and reviewed documentation, **not** live databases, private TLS material, credentials, or generated installer binaries. Historical test counts and hashes belong to their matching candidate; verify revision and acceptance record before relying on them.
+
+**License:** no open-source license is declared. Public source visibility does not grant reuse rights. Product information: [NorthCypher](https://northcypher.tech/).

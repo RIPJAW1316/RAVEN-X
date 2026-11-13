@@ -63,6 +63,31 @@ def test_expired_credential_is_not_served(tmp_path):
     assert store.credential_store.load() is None
 
 
+@pytest.mark.parametrize("year", [2001, 2099])
+@pytest.mark.parametrize("offset_us, accepted", [(-1, True), (0, False), (1, False)])
+def test_credential_expiry_boundary_uses_controlled_clock(tmp_path, monkeypatch, year, offset_us, accepted):
+    expiry = datetime(year, 1, 1, 12, 0, tzinfo=timezone.utc)
+    observed = expiry + timedelta(microseconds=offset_us)
+
+    class ControlledDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return observed.astimezone(tz) if tz is not None else observed.replace(tzinfo=None)
+
+    monkeypatch.setattr("backend.agent.windows_store.datetime", ControlledDatetime)
+    store = WindowsAgentStateStore(tmp_path, protector=FakeProtector(), files=FakeProtectedFiles())
+    grant = _grant()
+    grant.credential_expires_at = expiry
+    store.save_enrollment(grant, server_url="https://control.example")
+    credential = store.credential_store.load()
+    if accepted:
+        assert credential.credential_id == CredentialId(grant.credential_id)
+        assert credential.secret == grant.credential_secret
+    else:
+        assert credential is None
+    assert store.load_record().credential_expires_at == expiry
+
+
 @pytest.mark.skipif(__import__("os").name != "nt", reason="DPAPI requires Windows")
 def test_real_machine_dpapi_round_trip():
     protector = DpapiMachineProtector()

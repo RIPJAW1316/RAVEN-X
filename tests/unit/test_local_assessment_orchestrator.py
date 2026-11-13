@@ -1,6 +1,9 @@
 """Local scanner-selection orchestration tests with no platform side effects."""
 
 from datetime import datetime
+from dataclasses import replace
+
+import pytest
 
 from backend.application.assessment.local_orchestrator import LocalAssessmentOrchestrator
 from backend.application.assessment.options import AssessmentOptions
@@ -14,7 +17,10 @@ from backend.domain.scanner import (
     ScannerExecutionStatus,
     ScannerManifest,
     TargetCapabilities,
+    ExecutionCompleteness,
+    ScannerExecutionEvidence,
 )
+from backend.protocol.agent import AssessmentResultPayload
 
 
 TARGET = AssessmentTarget("local:test", "test-host", "Windows", metadata={"source": "test"})
@@ -50,6 +56,31 @@ def _success(scanner_id="windows.firewall", findings=()):
 
 def _orchestrator(*runtimes, capabilities=TargetCapabilities(frozenset({FIREWALL_CAPABILITY}))):
     return LocalAssessmentOrchestrator(ScannerRegistry(runtimes), lambda target: capabilities)
+
+
+@pytest.mark.parametrize("scanner_id", ["windows.firewall", "windows.bitlocker"])
+@pytest.mark.parametrize("completeness", [ExecutionCompleteness.PARTIAL, ExecutionCompleteness.UNKNOWN])
+def test_confirmed_finding_survives_failed_collector_without_claiming_complete_coverage(scanner_id, completeness):
+    finding = Finding("confirmed", FindingSeverity.HIGH, "Posture", "Confirmed violation", "observed", "Windows")
+    now = datetime.utcnow()
+    evidence = ScannerExecutionEvidence(scanner_id, "1.0", completeness, partial_reason="read incomplete")
+    collected = ScannerExecutionResult(scanner_id, ScannerExecutionStatus.FAILED, now, now,
+        findings=(finding,), error="local read incomplete", execution_evidence=evidence, error_category="READ_FAILED")
+    runtime = FakeRuntime(replace(FIREWALL_MANIFEST, scanner_id=scanner_id), collected)
+    result = _orchestrator(runtime).run(TARGET, (scanner_id,))
+    assert result.findings == (finding,)
+    assert result.scanner_results[0].status is ScannerExecutionStatus.FAILED
+    assert result.scanner_results[0].execution_evidence is evidence
+    assert result.scanner_results[0].execution_evidence.completeness is not ExecutionCompleteness.COMPLETE
+
+
+@pytest.mark.parametrize("status", [ScannerExecutionStatus.SKIPPED, ScannerExecutionStatus.INCOMPATIBLE])
+def test_non_executed_collector_does_not_promote_injected_findings(status):
+    now = datetime.utcnow()
+    finding = Finding("unconfirmed", FindingSeverity.HIGH, "Posture", "Unconfirmed", "", "Windows")
+    result = ScannerExecutionResult("windows.firewall", status, now, now, findings=(finding,))
+    assessed = _orchestrator(FakeRuntime(FIREWALL_MANIFEST, result)).run(TARGET, ("windows.firewall",))
+    assert assessed.findings == ()
 
 
 def test_selected_executable_scanner_aggregates_normalized_findings_and_target():
@@ -126,7 +157,7 @@ def test_promoted_legacy_requests_execute_with_an_injected_safe_scanner():
 def test_scanner_failure_does_not_fail_completed_orchestration_or_discard_successes():
     successful = FakeRuntime(FIREWALL_MANIFEST, _success())
     failed_manifest = ScannerManifest("windows.other", "Other", "Test scanner", "Other", "1.0")
-    failed = FakeRuntime(failed_manifest, error=RuntimeError("scanner failed"))
+    failed = FakeRuntime(failed_manifest, error=RuntimeError("SCANNER_SECRET_CANARY"))
 
     result = _orchestrator(successful, failed).run(TARGET, ("windows.firewall", "windows.other"))
 
@@ -135,7 +166,20 @@ def test_scanner_failure_does_not_fail_completed_orchestration_or_discard_succes
         ScannerExecutionStatus.SUCCESS,
         ScannerExecutionStatus.FAILED,
     ]
-    assert result.scanner_results[1].error == "scanner failed"
+    assert result.scanner_results[1].error == "local scanner execution failed"
+    assert "SCANNER_SECRET_CANARY" not in str(AssessmentResultPayload.from_assessment_result(result).to_dict())
+
+
+def test_capability_failure_does_not_expose_exception_text_in_assessment_result():
+    def fail_capability_lookup(_target):
+        raise RuntimeError("CAPABILITY_SECRET_CANARY")
+
+    result = LocalAssessmentOrchestrator(ScannerRegistry(()), fail_capability_lookup).run(
+        TARGET, ("windows.firewall",))
+
+    assert result.status is AssessmentStatus.FAILED
+    assert result.error == "local assessment execution failed"
+    assert "CAPABILITY_SECRET_CANARY" not in str(AssessmentResultPayload.from_assessment_result(result).to_dict())
 
 
 def test_selection_none_keeps_the_use_case_on_the_legacy_runner_path():

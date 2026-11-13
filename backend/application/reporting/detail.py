@@ -161,10 +161,33 @@ class TenantAssessmentDetailService:
         output = []
         for item in raw or ():
             if isinstance(item, Mapping):
-                output.append({"scanner_id": item.get("scanner_id"), "status": item.get("status"),
-                               "finding_count": len(item.get("findings") or ()),
-                               "error": type(item["error"]).__name__ if item.get("error") else None})
+                status = item.get("status")
+                if not isinstance(status, str) or status not in {"success", "failed", "skipped", "incompatible"}:
+                    status = "unknown"
+                evidence = item.get("execution_evidence")
+                if status == "success" and (
+                    item.get("error") is not None or item.get("error_category") is not None
+                    or not isinstance(evidence, Mapping) or evidence.get("completeness") != "complete"
+                ):
+                    status = "unknown"
+                findings = item.get("findings")
+                output.append({"scanner_id": item.get("scanner_id"), "status": status,
+                               "finding_count": len(findings) if status in {"success", "failed"} and isinstance(findings, (list, tuple)) else 0,
+                               "error": _collection_error_label(item, status)})
         return tuple(output)
+
+
+def _collection_error_label(item, status):
+    """Only fixed labels cross this boundary, including for legacy errors."""
+    if status == "incompatible":
+        return "UNSUPPORTED"
+    if status == "skipped":
+        return "NOT_COLLECTED"
+    if status == "failed" and item.get("error_category") == "READ_FAILED":
+        return "READ_FAILED"
+    if status == "success" and item.get("error") is None and item.get("error_category") is None:
+        return None
+    return "COLLECTION_FAILED"
 
 
 class TenantFindingService:

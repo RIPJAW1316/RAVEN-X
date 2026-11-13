@@ -94,7 +94,8 @@ def test_host_rejects_server_or_ca_swap_and_expired_credential(tmp_path, monkeyp
                          transport=FakeTransport())
 
 
-def test_host_executes_one_allowlisted_read_only_dispatch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("enabled,consent,title", [(0, 2, "UAC Disabled"), (1, 5, "UAC Not at Maximum Security")])
+def test_host_executes_one_allowlisted_read_only_dispatch(tmp_path, monkeypatch, enabled, consent, title):
     ca_cert = tmp_path / "ca.pem"
     ca_cert.write_text("trusted CA")
     store = FakeStore(tmp_path, ca_cert)
@@ -102,7 +103,7 @@ def test_host_executes_one_allowlisted_read_only_dispatch(tmp_path, monkeypatch)
                     if scanner.manifest.scanner_id == "windows.uac")
     scanner = WindowsReadOnlyScanner(
         manifest, registry_reader=lambda name: {
-            "ConsentPromptBehaviorAdmin": 5, "PromptOnSecureDesktop": 1,
+            "EnableLUA": enabled, "ConsentPromptBehaviorAdmin": consent, "PromptOnSecureDesktop": 1,
         }[name],
     )
     monkeypatch.setattr(host_module, "windows_read_only_scanners", lambda: (scanner,))
@@ -130,7 +131,7 @@ def test_host_executes_one_allowlisted_read_only_dispatch(tmp_path, monkeypatch)
     assert kinds[:3] == [AgentMessageType.HEARTBEAT, AgentMessageType.CAPABILITIES, AgentMessageType.STATUS]
     assert AgentMessageType.ASSESSMENT_ACK in kinds
     result = next(message for message in transport.sent if message.message_type is AgentMessageType.ASSESSMENT_RESULT)
-    assert result.payload["findings"][0]["title"] == "UAC Not at Maximum Security"
+    assert result.payload["findings"][0]["title"] == title
 
 
 def test_importing_agent_does_not_import_personal_scanner_or_server_stack():
@@ -139,7 +140,21 @@ def test_importing_agent_does_not_import_personal_scanner_or_server_stack():
     assert run.stdout.strip() == "False False"
 
 
-def test_host_automatically_renews_near_expiry_credential_and_continues_operating(tmp_path, monkeypatch):
+@pytest.fixture
+def credential_clock(monkeypatch):
+    """Keep the host fixture and the persisted-credential view on one clock."""
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+
+    class ControlledDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr("backend.agent.windows_store.datetime", ControlledDatetime)
+    return now
+
+
+def test_host_automatically_renews_near_expiry_credential_and_continues_operating(tmp_path, monkeypatch, credential_clock):
     from backend.agent.host import HostIntervals
     from backend.agent.windows_store import WindowsAgentStateStore
     from backend.infrastructure.transport.http.client import RenewalConfirmation, RenewalReceipt
@@ -158,7 +173,7 @@ def test_host_automatically_renews_near_expiry_credential_and_continues_operatin
 
     ca_cert = tmp_path / "ca.pem"
     ca_cert.write_text("trusted CA")
-    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    now = credential_clock
     store = WindowsAgentStateStore(tmp_path, protector=FakeProtector(), files=FakeFiles())
     initial_grant = type("Grant", (), {
         "endpoint_id": EndpointId.new(),
@@ -226,7 +241,7 @@ def test_host_automatically_renews_near_expiry_credential_and_continues_operatin
     assert len(transport.renewals) == 1
 
 
-def test_host_defers_renewal_when_endpoint_is_pending_approval(tmp_path, monkeypatch):
+def test_host_defers_renewal_when_endpoint_is_pending_approval(tmp_path, monkeypatch, credential_clock):
     from backend.agent.host import HostIntervals
     from backend.agent.windows_store import WindowsAgentStateStore
 
@@ -244,7 +259,7 @@ def test_host_defers_renewal_when_endpoint_is_pending_approval(tmp_path, monkeyp
 
     ca_cert = tmp_path / "ca.pem"
     ca_cert.write_text("trusted CA")
-    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    now = credential_clock
     store = WindowsAgentStateStore(tmp_path, protector=FakeProtector(), files=FakeFiles())
     store.save_enrollment(type("Grant", (), {
         "endpoint_id": EndpointId.new(),

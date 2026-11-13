@@ -76,6 +76,31 @@ def test_agent_installer_configures_battery_resilient_scheduled_task_settings():
     assert "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings" in source
 
 
+def test_agent_installer_verifies_release_and_tls_before_creating_agent_state():
+    source = (ROOT / "scripts" / "install-agent.ps1").read_text(encoding="utf-8")
+    release = source.index("Assert-VerifiedRelease $repoRoot")
+    trust = source.index("backend\\agent\\trust.py")
+    first_install = source.index("Protect-CodeDirectory $installParent")
+    enrollment = source.index("-m backend.agent enroll")
+    assert release < trust < first_install < enrollment
+    assert "--no-index --no-cache-dir" in source
+    assert "--require-hashes" in source
+    assert "-r (Join-Path $installRoot 'requirements-agent-lock.txt')" in source
+    assert "-m backend.agent enroll" in source
+    assert "Bootstrap token" not in source.split("$arguments =", 1)[1]
+
+
+def test_compiled_installer_source_pins_extraction_before_running_scripts():
+    source = (ROOT / "scripts" / "RAVEN-X-Agent-Setup.iss").read_text(encoding="utf-8")
+    assert "PrivilegesRequired=admin" in source
+    assert "ArchitecturesAllowed=x64compatible" in source
+    assert "function PrepareToInstall" in source
+    assert "release extraction path was overridden" in source
+    assert "CheckStageSecurity(Stage, Parent);" in source
+    assert "GetSHA256OfFile(Stage + '\\scripts\\install-agent.ps1')" in source
+    assert source.index("CheckStageSecurity(Stage, Parent);") < source.index("if not Exec(PowerShell, Params")
+
+
 @pytest.mark.parametrize("candidate,accepted", [
     (r"C:\Users\untrusted\Python313\python.exe", False),
     (r"C:\Program Files\..\Users\untrusted\python.exe", False),

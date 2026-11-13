@@ -85,6 +85,15 @@ scan_history.json
 # -------------------------------------------------------------- Archives --
 *.zip
 
+# Local extraction stages, private operational evidence and historical copies.
+/artifacts/
+/Raven-x-enterprise/
+/.claude/
+/docs/funding/
+/*DIAG*.txt
+/*DIAG*.json
+/*REHEARSAL_RESULT*.json
+
 # ------------------------------------------------------------- Secrets ----
 raven_x_config.json
 *.key

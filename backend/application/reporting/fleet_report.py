@@ -257,8 +257,19 @@ def _scanner_results(result):
         value = result.get("scanner_results")
     if not isinstance(value, (list, tuple)):
         value = ()
-    return [{"scanner_id": _text(item.get("scanner_id"), 100),
-             "status": _text(item.get("status"), 40),
-             "finding_count": len(item.get("findings")) if isinstance(item.get("findings"), (list, tuple)) else 0,
-             "has_error": bool(item.get("error"))}
-            for item in (value or ())[:50] if isinstance(item, Mapping)]
+    projected = []
+    for item in (value or ())[:50]:
+        if not isinstance(item, Mapping):
+            continue
+        status = _text(item.get("status"), 40)
+        evidence = item.get("execution_evidence")
+        if status == "success" and (
+            item.get("error") is not None or item.get("error_category") is not None
+            or not isinstance(evidence, Mapping) or evidence.get("completeness") != "complete"
+        ):
+            status = "unknown"
+        findings = item.get("findings")
+        projected.append({"scanner_id": _text(item.get("scanner_id"), 100), "status": status,
+                          "finding_count": len(findings) if status in {"success", "failed"} and isinstance(findings, (list, tuple)) else 0,
+                          "has_error": item.get("error") is not None or item.get("error_category") is not None or status == "unknown"})
+    return projected

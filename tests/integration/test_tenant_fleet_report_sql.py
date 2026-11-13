@@ -47,7 +47,8 @@ def test_sql_fleet_report_excludes_other_tenant_and_reads_persisted_evidence(tmp
             assessment_id, str(endpoint.endpoint_id), "completed", NOW, NOW,
             ({"finding_id": assessment_id + "-finding", "severity": "high", "title": "Firewall off",
               "description": "Public profile disabled", "evidence": [{"source": "firewall", "observed_value": "off"}]},),
-            ({"scanner_id": "windows.firewall", "status": "success", "findings": [{}]},))
+            ({"scanner_id": "windows.firewall", "status": "success", "findings": [{}],
+              "execution_evidence": {"completeness": "complete"}},))
         assessments.add(RemoteAssessment(assessment_id, endpoint.endpoint_id, CorrelationId(),
                                          ("windows.firewall",), NOW, RemoteAssessmentState.COMPLETED,
                                          result=payload, completed_at=NOW, organization_id=owner))
