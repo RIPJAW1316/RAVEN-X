@@ -71,7 +71,7 @@ export function Reports({ organizationId, endpointId, navigate }: { organization
       {endpointId && <button type="button" className="back" onClick={() => navigate("reports")}>Back to consolidated report</button>}
       <FleetReport key={`${organizationId}:${endpointId ?? "fleet"}`} organizationId={organizationId} endpointId={endpointId} navigate={navigate} />
 
-      <Panel title="COMPLIANCE SNAPSHOT EXPORTS" icon={<FileText size={15} aria-hidden="true" />}>
+      <Panel title="Compliance snapshot exports" icon={<FileText size={15} aria-hidden="true" />}>
         <AsyncSection
           loading={frameworks.loading}
           error={frameworks.error}
@@ -94,7 +94,8 @@ export function Reports({ organizationId, endpointId, navigate }: { organization
             ) : items.length === 0 ? (
               <Empty
                 title="No snapshots to export"
-                detail="Capture a compliance snapshot first — exports are generated from stored snapshots, not from live evaluation."
+                detail="Capture the current posture in Compliance to add a snapshot to this list."
+                action={<button type="button" className="ghost" onClick={() => navigate("compliance")}>Open Compliance</button>}
               />
             ) : (
               <>
@@ -118,9 +119,9 @@ export function Reports({ organizationId, endpointId, navigate }: { organization
                           <td>{formatDateTime(at)}</td>
                           <td>
                             <span className="snapshot-counts inline">
-                              <b className="tone-ok">{snapshot.compliant ?? "—"}</b>
-                              <b className="tone-critical">{snapshot.non_compliant ?? "—"}</b>
-                              <b className="tone-warn">{snapshot.unknown ?? "—"}</b>
+                              <b className="tone-ok">{snapshot.compliant ?? "—"} compliant</b>
+                              <b className="tone-critical">{snapshot.non_compliant ?? "—"} non-compliant</b>
+                              <b className="tone-warn">{snapshot.unknown ?? "—"} unknown</b>
                             </span>
                           </td>
                           <td className="row-actions">

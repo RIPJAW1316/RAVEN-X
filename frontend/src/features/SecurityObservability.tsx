@@ -57,7 +57,7 @@ export function SecurityObservability({
 
   return (
     <Panel
-      title="SECURITY OBSERVABILITY"
+      title="Security observability"
       icon={<Activity size={15} aria-hidden="true" />}
       actions={
         state.data && (

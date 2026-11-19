@@ -155,6 +155,6 @@ export async function requestBlob(
   if (response.status === 401) session.set(null);
   if (!response.ok) throw await parseError(response);
   const disposition = response.headers.get("Content-Disposition");
-  const match = disposition?.match(/filename=([^;]+)/);
-  return { blob: await response.blob(), filename: match ? match[1].trim() : null };
+  const match = disposition?.match(/(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]+))/i);
+  return { blob: await response.blob(), filename: match ? (match[1] ?? match[2]).trim() : null };
 }

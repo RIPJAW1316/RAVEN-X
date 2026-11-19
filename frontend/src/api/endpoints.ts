@@ -45,6 +45,9 @@ const org = (id: string) => `/api/v1/organizations/${encodeURIComponent(id)}`;
 
 export const insights = {
   fleetCsv: (id: string) => requestBlob(`${org(id)}/reports/fleet.csv`),
+  fleetPdf: (id: string, endpointId?: string) => requestBlob(endpointId
+    ? `${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report.pdf`
+    : `${org(id)}/reports/fleet.pdf`),
   fleetReport: (id: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/reports/fleet`, { signal }),
   endpointReport: (id: string, endpointId: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report`, { signal }),
   analyze: (id: string, endpointId?: string) => request<LocalAnalysis>(`${org(id)}/ai/analyze`, { method: "POST", body: endpointId ? { endpoint_id: endpointId } : {} }),

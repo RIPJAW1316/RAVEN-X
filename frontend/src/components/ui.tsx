@@ -4,7 +4,7 @@
  * Status is always communicated with a glyph or text label in addition to
  * colour so the interface stays readable without hue perception.
  */
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { ApiError } from "../api/client";
 import {
   SEVERITY_GLYPH,
@@ -45,8 +45,8 @@ export function Panel({
       {(title || actions) && (
         <header className="panel-kicker">
           <span className="panel-title">
-            {title}
             {icon}
+            {title}
           </span>
           {actions && <span className="panel-actions">{actions}</span>}
         </header>
@@ -127,12 +127,14 @@ export function SeverityBadge({ severity, count }: { severity: Severity; count?:
 /* ------------------------------------------------------------- stat tiles */
 
 export function Stat({
+  icon,
   label,
   value,
   hint,
   tone = "neutral",
   onClick,
 }: {
+  icon?: ReactNode;
   label: string;
   value: ReactNode;
   hint?: string;
@@ -141,7 +143,7 @@ export function Stat({
 }) {
   const content = (
     <>
-      <span className="stat-label">{label}</span>
+      <span className="stat-label">{icon && <span className={`stat-icon tone-${tone}`} aria-hidden="true">{icon}</span>}{label}</span>
       <strong className={`stat-value tone-${tone}`}>{value}</strong>
       {hint && <small className="stat-hint">{hint}</small>}
     </>
@@ -469,6 +471,20 @@ export function Toast({
   );
 }
 
+export function SelectionHighlight({ group }: { group: string }) {
+  const reduced = useReducedMotion();
+  if (reduced) return <span className="selection-highlight" aria-hidden="true" />;
+  return (
+    <motion.span
+      aria-hidden="true"
+      className="selection-highlight"
+      layoutId={group}
+      initial={false}
+      transition={{ type: "spring", stiffness: 520, damping: 39 }}
+    />
+  );
+}
+
 export function Tabs<T extends string>({
   tabs,
   active,
@@ -478,6 +494,7 @@ export function Tabs<T extends string>({
   active: T;
   onChange: (id: T) => void;
 }) {
+  const group = useId();
   return (
     <div className="tabs" role="tablist">
       {tabs.map((tab) => (
@@ -489,6 +506,7 @@ export function Tabs<T extends string>({
           className={tab.id === active ? "tab active" : "tab"}
           onClick={() => onChange(tab.id)}
         >
+          {tab.id === active && <SelectionHighlight group={group} />}
           {tab.label}
           {tab.count !== undefined && <em>{tab.count}</em>}
         </button>

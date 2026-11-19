@@ -209,3 +209,88 @@ test("successful, finding, uncollected and malformed states use fixed labels wit
     await expect(page.getByText("Successfully collected", { exact: true })).toHaveCount(0);
   }
 });
+
+test("appearance persists and formatted advisories keep model output inert", async ({ page }, testInfo) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await page.route("**/security/overview", route => route.fulfill({ json: {
+    organization_id: organizationId, generated_at: timestamp,
+    endpoints: { total_endpoints: 3, active_endpoints: 3, revoked_endpoints: 0 },
+    presence: { unknown: 0, online: 2, stale: 0, offline: 1, revoked: 0 },
+    assessments: { completed: 2, queued: 1 }, findings: { critical: 0, high: 2, medium: 1, low: 0, info: 0, total_occurrences: 3 },
+    recent_assessments: [], recent_high_severity_findings: [], malformed_finding_count: 0,
+  } }));
+  const portal = new AssessmentOutcomePortal(page);
+  await portal.signIn();
+  await expect(page.getByRole("img", { name: "Online: 2, Offline: 1" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("dashboard-dark.png") });
+  await page.route("**/auth/me", route => route.fulfill({ json: { email: "operator@example.invalid", status: "active" } }));
+  await page.route("**/organizations/synthetic-organization", route => route.fulfill({ json: { name: "Test organization", status: "active" } }));
+  await page.route("**/memberships", route => route.fulfill({ json: [] }));
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Dark" })).toBeChecked();
+  await page.getByText("Light", { exact: true }).click();
+  await page.reload();
+  await expect(page.getByRole("radio", { name: "Light" })).toBeChecked();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.screenshot({ path: testInfo.outputPath("settings-light.png") });
+  await page.getByText("Dark", { exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("combobox", { name: "Go to screen" }).selectOption("analyst");
+  await page.route("**/ai/analyze", route => route.fulfill({ json: {
+    status: "available", model: "Fixture model", source: { assessment_ids: ["fixture-run"] },
+    analysis: "```markdown\n## Assessment summary\n\n- **Review** the encryption setting.\n\n![image](/tracking-image)\n<script>alert(1)</script>\n```",
+  } }));
+  await page.getByRole("button", { name: "Analyze evidence" }).click();
+  const advisory = page.getByRole("article", { name: "Assessment interpretation" });
+  await expect(advisory.getByRole("heading", { name: "Assessment summary" })).toBeVisible();
+  await expect(advisory.getByRole("listitem")).toContainText("Review the encryption setting.");
+  await expect(advisory.locator("strong")).toHaveText("Review");
+  await expect(advisory.locator("img, script")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("posture with unknown evidence and a paginated printable machine report", async ({ page }, testInfo) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await new AssessmentOutcomePortal(page).signIn();
+  const framework = { framework_id: "baseline", name: "Windows baseline", control_ids: [], controls: [] };
+  await page.route("**/compliance/frameworks", route => route.fulfill({ json: [framework] }));
+  await page.route("**/compliance/frameworks/baseline", route => route.fulfill({ json: framework }));
+  await page.route("**/compliance/baseline/summary", route => route.fulfill({ json: {
+    compliant: 0, non_compliant: 0, unknown: 4, not_applicable: 0, controls_evaluated: 4,
+    endpoints_evaluated: 1, endpoints_examined: 1, evaluation_complete: true, framework_version: "1",
+  } }));
+  await page.route("**/snapshots?**", route => route.fulfill({ json: [] }));
+  await page.route("**/fleet/endpoints?**", route => route.fulfill({ json: {
+    items: [{ endpoint_id: "fixture-machine", hostname: "Print fixture", lifecycle_status: "active" }], total: 1,
+  } }));
+  await page.route("**/endpoints/fixture-machine/compliance/baseline", route => route.fulfill({ json: [{
+    control_id: "RX-WIN-FW-001", status: "unknown", reason: "scanner_failed", source_assessment_id: "fixture-run",
+  }] }));
+  await page.getByRole("link", { name: "Compliance", exact: true }).click();
+  await expect(page.getByRole("img", { name: "Unknown: 4" })).toBeVisible();
+  await expect(page.getByText("No snapshots captured")).toBeVisible();
+  await expect(page.getByRole("cell", {name: "Scanner Failed", exact: true})).toBeVisible();
+  await page.route("**/endpoints/fixture-machine/report", route => route.fulfill({ json: {
+    generated_at: timestamp, summary: { total_enrolled: 1, approved: 1, pending_approval: 0, scanned: 1,
+      not_scanned: 0, partial: 0, failed: 0, pending: 0, running: 0, findings_from_completed_scans: 1 },
+    endpoints: [{ endpoint_id: "fixture-machine", hostname: "Print fixture", lifecycle_status: "approved",
+      presence_state: "online", scan_status: "scanned", findings_count: 1, latest_assessment: { requested_at: timestamp },
+      scanner_results: Array.from({ length: 60 }, (_, i) => ({ scanner_id: "fixture-check-" + (i + 1), status: "success", finding_count: 0 })),
+      findings: [{ title: "Evidence at end of report", severity: "high", description: "Fixture observation.", evidence: [{ source: "local fixture" }] }],
+    }],
+  } }));
+  await page.goto("/#/reports/fixture-machine");
+  await expect(page.getByText("Evidence at end of report")).toBeVisible();
+  await page.route("**/endpoints/fixture-machine/report.pdf", route => route.fulfill({
+    body: "%PDF-1.7\n", contentType: "application/pdf", headers: {
+      "Content-Disposition": 'attachment; filename="ravenx-machine-report.pdf"',
+    },
+  }));
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download PDF" }).click();
+  expect((await download).suggestedFilename()).toBe("ravenx-machine-report.pdf");
+  await page.emulateMedia({ media: "print" });
+  await expect(page.getByRole("heading", { name: "Print fixture", exact: true })).toBeVisible();
+  await expect(page.getByText("Compliance snapshot exports")).toBeHidden();
+  await page.pdf({ path: testInfo.outputPath("machine-report.pdf"), format: "A4" });
+});

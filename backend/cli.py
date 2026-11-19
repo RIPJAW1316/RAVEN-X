@@ -10,11 +10,24 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
+from threading import Thread
 
 from .infrastructure.security.windows_files import WindowsFileSecurityError
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _stop_when_launcher_closes(server) -> None:
+    # Read the OS handle directly, so a blocked reader cannot hold Python's
+    # buffered stdin lock during interpreter shutdown.
+    try:
+        while os.read(sys.stdin.fileno(), 1):
+            pass
+    except OSError:
+        pass
+    server.should_exit = True
 
 
 def default_data_dir() -> Path:
@@ -201,6 +214,7 @@ def main(argv=None) -> int:
             item.add_argument("--email", required=True)
             item.add_argument("--name", default="RAVEN-X administrator")
             item.add_argument("--organization", required=True)
+            item.add_argument("--password-stdin", action="store_true", help=argparse.SUPPRESS)
         elif command == "tls-init":
             item.add_argument("--host", action="append", default=[], help="LAN IP or DNS name; repeat for each name")
         elif command == "rollback-check":
@@ -213,6 +227,7 @@ def main(argv=None) -> int:
             item.add_argument("--cert", type=Path)
             item.add_argument("--key", type=Path)
             item.add_argument("--local-http", action="store_true", help="Loopback development only")
+            item.add_argument("--stop-on-stdin-eof", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     data_dir = args.data_dir.absolute()
     if args.command in {"migrate", "bootstrap", "serve"}:
@@ -271,9 +286,14 @@ def main(argv=None) -> int:
             print(json.dumps(result, indent=2))
         elif args.command == "bootstrap":
             prepare_data_dir(data_dir)
-            password = getpass.getpass("New administrator password (12+ characters): ")
-            if password != getpass.getpass("Confirm password: "):
-                raise ValueError("passwords did not match")
+            if args.password_stdin:
+                if sys.stdin.isatty():
+                    raise ValueError("launcher password input requires a private pipe")
+                password = sys.stdin.readline(130).rstrip("\r\n")
+            else:
+                password = getpass.getpass("New administrator password (12+ characters): ")
+                if password != getpass.getpass("Confirm password: "):
+                    raise ValueError("passwords did not match")
             from .core.database.database import DatabaseManager
             database = DatabaseManager()
             try:
@@ -304,17 +324,31 @@ def main(argv=None) -> int:
             os.environ["RAVENX_SERVER_WORKERS"] = "1"
             os.environ.setdefault("RAVENX_PRESENCE_MAINTENANCE_ENABLED", "true")
             import uvicorn
-            if len(hosts) == 1:
+            if len(hosts) == 1 and not args.stop_on_stdin_eof:
                 uvicorn.run("backend.api.main:app", host=hosts[0], port=args.port, workers=1,
                             ssl_certfile=str(cert) if cert else None, ssl_keyfile=str(key) if key else None,
                             proxy_headers=False, server_header=False)
             else:
                 config = uvicorn.Config("backend.api.main:app", workers=1,
-                                        ssl_certfile=str(cert), ssl_keyfile=str(key),
+                                        ssl_certfile=str(cert) if cert else None,
+                                        ssl_keyfile=str(key) if key else None,
                                         proxy_headers=False, server_header=False)
                 sockets = bind_sockets(tuple(hosts), args.port)
                 try:
-                    uvicorn.Server(config).run(sockets=sockets)
+                    if args.stop_on_stdin_eof:
+                        class LauncherServer(uvicorn.Server):
+                            async def startup(self, sockets=None):
+                                await super().startup(sockets=sockets)
+                                if self.started and not self.should_exit:
+                                    print("RAVENX_LAUNCHER_READY", flush=True)
+
+                        server = LauncherServer(config)
+                        Thread(target=_stop_when_launcher_closes, args=(server,), daemon=True).start()
+                    else:
+                        server = uvicorn.Server(config)
+                    server.run(sockets=sockets)
+                    if not server.started:
+                        raise ValueError("server startup did not complete")
                 finally:
                     for listener in sockets:
                         listener.close()

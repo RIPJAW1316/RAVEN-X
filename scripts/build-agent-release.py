@@ -18,14 +18,14 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BASELINE = "409f95573b1832a8d1a458dd4f91e13b8ca0d7d8"
-ACCEPTED_DIFF = "038e1ff76c664017a3c1e886362360c958fe9cdddfcd7f0469b7b7e58782c3a6"
-VERSION = "1.0.0-rc1"
+BASELINE = "b53ac0fea11432badcc13e89d0d0f3966d1689bd"
+ACCEPTED_DIFF = "96e4cbd61c1154ea37a558fabb213075cd0378fb8232582acbfc02d5ee8e5d3a"
+VERSION = "1.0.0-rc9"
+EXTENDED_CHECKS_SHA256 = "eaa8d9b386b13222dba73ff90d1726f01a5bedb5a1e751f48df6b5ec277bfb93"
 ACCEPTED_PATHS = (
     "backend/agent/windows_scanners.py", "backend/application/assessment/local_orchestrator.py",
     "backend/application/reporting/detail.py", "backend/application/reporting/fleet_report.py",
-    "frontend/e2e/assessment-outcomes.spec.ts", "frontend/playwright.config.ts",
-    "frontend/src/features/Assessments.tsx", "scripts/e2e-server.py",
+    "scripts/e2e-server.py",
     "tests/integration/test_https_windows_golden_path.py", "tests/integration/test_tenant_fleet_report_sql.py",
     "tests/unit/test_finding_identity_and_detail.py", "tests/unit/test_local_assessment_orchestrator.py",
     "tests/unit/test_local_capabilities.py", "tests/unit/test_tenant_insights.py",
@@ -38,7 +38,7 @@ WHEEL_NAMES = frozenset({
     "httpx-0.28.1-py3-none-any.whl", "idna-3.20-py3-none-any.whl",
     "pywin32-312-cp313-cp313-win_amd64.whl", "typing_extensions-4.16.0-py3-none-any.whl",
 })
-SCRIPT_NAMES = ("install-agent.ps1", "runtime-selection.ps1", "release-integrity.ps1")
+SCRIPT_NAMES = ("install-agent.ps1", "runtime-selection.ps1", "release-integrity.ps1", "setup-agent.ps1", "managed-python.ps1")
 
 
 def digest(data: bytes) -> str:
@@ -51,7 +51,10 @@ def verify_accepted_source() -> None:
         raise ValueError("source baseline changed")
     delta = subprocess.check_output(["git", "diff", "--binary", "--", *ACCEPTED_PATHS], cwd=ROOT)
     if digest(delta) != ACCEPTED_DIFF:
-        raise ValueError("accepted Phase 1A-B diff changed")
+        raise ValueError("reviewed scanner source diff changed")
+    extended = ROOT / "backend" / "agent" / "windows_extended_checks.py"
+    if digest(extended.read_bytes()) != EXTENDED_CHECKS_SHA256:
+        raise ValueError("reviewed extended scanner source changed")
 
 
 def agent_source_paths() -> set[Path]:
@@ -76,7 +79,8 @@ def agent_source_paths() -> set[Path]:
             raise ValueError(f"agent imported forbidden component: {relative}")
         paths.add(relative)
     paths.add(Path("backend/agent/__main__.py"))
-    if not paths or Path("backend/agent/windows_scanners.py") not in paths:
+    if not paths or not {Path("backend/agent/windows_scanners.py"),
+                         Path("backend/agent/windows_extended_checks.py")}.issubset(paths):
         raise ValueError("agent dependency closure is incomplete")
     return paths
 
@@ -127,6 +131,9 @@ def build(wheel_dir: Path, destination: Path) -> Path:
         if f"sha256:{digest(wheel.read_bytes())}" not in lock:
             raise ValueError("wheel SHA-256 does not match the locked dependency set")
 
+    runtime_archive = ROOT / "dist" / "python-3.13.17-amd64.zip"
+    if digest(runtime_archive.read_bytes()) != "b26ca4b4ee51e157836049934d2b8eabd55939be296f3130254251b6df96ec2f":
+        raise ValueError("official full Python runtime archive differs")
     sources = agent_source_paths()
     payloads = sorted(sources | {Path("scripts") / name for name in SCRIPT_NAMES}
                       | {Path("requirements-agent-lock.txt")})
@@ -143,6 +150,8 @@ def build(wheel_dir: Path, destination: Path) -> Path:
         wheel_target.mkdir()
         for name, source in sorted(wheels.items()):
             shutil.copyfile(source, wheel_target / name)
+        (destination / "runtime").mkdir()
+        shutil.copyfile(runtime_archive, destination / "runtime" / runtime_archive.name)
         entries = []
         for path in sorted(destination.rglob("*")):
             if path.is_file():
@@ -183,7 +192,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "dist" / "release" / f"RAVEN-X-Agent-{VERSION}")
     args = parser.parse_args()
     location = build(args.wheel_dir, args.output)
-    write_offline_manifest(location, location.parents[1] / "offline-dependency-manifest.json")
+    write_offline_manifest(location, location.parent / f"{location.name}-offline-dependencies.json")
     print(f"Release stage: {location}")
     print(f"Manifest SHA-256: {digest((location / 'release-manifest.json').read_bytes())}")
     return 0

@@ -19,7 +19,8 @@ param(
     [Parameter(Mandatory = $true)][guid]$EnrollmentId,
     [Parameter(Mandatory = $true)][string]$CaCertPath,
     [Parameter(Mandatory = $true)][string]$CaCertSha256,
-    [switch]$NoStart
+    [switch]$NoStart,
+    [Security.SecureString]$BootstrapToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -122,10 +123,11 @@ function Protect-CodeDirectory([string]$Path) {
     if (Test-Path -LiteralPath $Path) { throw "Install directory already exists: $Path" }
     New-Item -ItemType Directory -Path $Path | Out-Null
     Assert-NotReparseTree $Path
-    & icacls.exe $Path '/inheritance:r' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove inherited install ACL.' }
+    # Establish trusted explicit access before removing inherited ACEs.
     & icacls.exe $Path '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to grant SYSTEM and Administrators access.' }
+    & icacls.exe $Path '/inheritance:r' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove inherited install ACL.' }
     & icacls.exe $Path '/setowner' '*S-1-5-32-544' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to set the install directory owner.' }
     $acl = Get-Acl -LiteralPath $Path
@@ -149,18 +151,35 @@ function Protect-CodeDirectory([string]$Path) {
 
 Assert-NotReparseTree $env:ProgramFiles
 Assert-NoUntrustedWrite $env:ProgramFiles
-$launcher = Join-Path $env:WINDIR 'py.exe'
-if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
-    throw 'Install the system-wide Python 3.13 launcher before deploying the SYSTEM agent.'
-}
-Assert-NotReparseTree $launcher
-Assert-NoUntrustedWrite $launcher
-# Listing registered runtimes does not execute a selected interpreter.
-# Never invoke py -3.13 before validating the chosen executable.
-# A per-user Python 3.13 does not disqualify one protected system interpreter.
 . (Join-Path $PSScriptRoot 'runtime-selection.ps1')
-$basePython = Select-RavenXPython313 -Launcher $launcher -ProgramFiles $env:ProgramFiles -ProtectedTreeCommand 'Assert-NoUntrustedWriteTree'
-$runtime = & $basePython -I -c 'import platform,sys; print("{0}|{1}|{2}".format(sys.version_info.major,sys.version_info.minor,platform.machine()))'
+$managedRoot = Join-Path $env:ProgramFiles 'RavenXRuntime\Python313-3.13.17'
+$managedPython = Join-Path $managedRoot 'python.exe'
+if (Test-Path -LiteralPath $managedPython -PathType Leaf) {
+    # Validate every child of the managed runtime before loading its modules.
+    Assert-NotReparseTree $managedPython
+    Assert-NoUntrustedWriteTree $managedPython $env:ProgramFiles
+    foreach ($item in @(Get-ChildItem -LiteralPath $managedRoot -Recurse -Force -ErrorAction Stop)) {
+        Assert-NotReparseTree $item.FullName
+        Assert-NoUntrustedWrite $item.FullName
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $managedPython
+    if ($signature.Status -ne 'Valid' -or
+        $signature.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+        throw 'Managed Python executable signature is invalid.'
+    }
+    $basePython = $managedPython
+} else {
+    $launcher = Join-Path $env:WINDIR 'py.exe'
+    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+        throw 'Install a protected Python 3.13 runtime before deploying the SYSTEM agent.'
+    }
+    Assert-NotReparseTree $launcher
+    Assert-NoUntrustedWrite $launcher
+    # Listing registered runtimes does not execute a selected interpreter.
+    # Never invoke py -3.13 before validating the chosen executable.
+    $basePython = Select-RavenXPython313 -Launcher $launcher -ProgramFiles $env:ProgramFiles -ProtectedTreeCommand 'Assert-NoUntrustedWriteTree'
+}
+$runtime = & $basePython -I -c 'import platform,sys;print(str(sys.version_info.major)+chr(124)+str(sys.version_info.minor)+chr(124)+platform.machine())'
 if ($LASTEXITCODE -ne 0 -or $runtime -ne '3|13|AMD64') {
     throw 'A protected Windows AMD64 Python 3.13 runtime is required.'
 }
@@ -190,7 +209,24 @@ Push-Location $installRoot
 try {
     & $agentPython -E -s -m backend.agent prepare --ca-cert-source $CaCertPath --expected-ca-sha256 $CaCertSha256 --data-dir $dataRoot
     if ($LASTEXITCODE -ne 0) { throw 'Protected storage preparation failed.' }
-    & $agentPython -E -s -m backend.agent enroll --server $ServerUrl --enrollment-id $EnrollmentId --ca-cert $caTarget --data-dir $dataRoot
+    $enrollArgs = @('-E', '-s', '-m', 'backend.agent', 'enroll', '--server', $ServerUrl,
+        '--enrollment-id', $EnrollmentId.ToString(), '--ca-cert', $caTarget, '--data-dir', $dataRoot)
+    if ($null -eq $BootstrapToken) {
+        & $agentPython @enrollArgs --interactive-retry
+    } else {
+        $secret = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($BootstrapToken)
+        try {
+            $ErrorActionPreference = 'Continue'
+            $enrollOutput = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secret) |
+                & $agentPython @enrollArgs --token-stdin 2>&1
+        } finally {
+            $ErrorActionPreference = 'Stop'
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secret)
+        }
+        if ($LASTEXITCODE -ne 0 -and ($enrollOutput -join ' ') -match '\benrollment_rejected\b') {
+            throw 'Omen rejected enrollment. Run Recovery, then retry with a fresh matching enrollment ID and token.'
+        }
+    }
     if ($LASTEXITCODE -ne 0) { throw 'Agent enrollment failed.' }
 
     $arguments = '-E -s -m backend.agent run --server "{0}" --ca-cert "{1}" --data-dir "{2}"' -f $ServerUrl, $caTarget, $dataRoot

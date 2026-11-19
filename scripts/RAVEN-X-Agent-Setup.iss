@@ -1,5 +1,5 @@
-#define ReleaseVersion "1.0.0-rc1"
-#define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc1"
+#define ReleaseVersion "1.0.0-rc5"
+#define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc5"
 #define MainScriptHash GetSHA256OfFile(StageRoot + "\scripts\install-agent.ps1")
 #define IntegrityScriptHash GetSHA256OfFile(StageRoot + "\scripts\release-integrity.ps1")
 
@@ -17,7 +17,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=RAVEN-X-Agent-Setup
+OutputBaseFilename=RAVEN-X-Agent-Setup-rc5
 Compression=lzma2
 SolidCompression=yes
 Uninstallable=no
@@ -154,8 +154,11 @@ end;
 procedure RunChecked(FileName, Parameters, MessageText: String);
 var ExitCode: Integer;
 begin
-  if not Exec(FileName, Parameters, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
-    RaiseException(MessageText);
+  ExitCode := -1;
+  if not Exec(FileName, Parameters, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+    RaiseException(MessageText + ' ACL tool could not start.');
+  if ExitCode <> 0 then
+    RaiseException(MessageText + ' ACL tool exit code: ' + IntToStr(ExitCode));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -173,11 +176,13 @@ begin
 
   { Program Files provides the initial protected extraction boundary. Lock the
     parent and every extracted child before any packaged script is executed. }
-  RunChecked(Ica, AddQuotes(Parent) + ' /inheritance:r', 'Could not protect release parent ACL.');
+  { Grant explicit trusted access before removing inherited ACEs. Some Windows
+    installations lose the only usable write-DAC path if inheritance goes first. }
   RunChecked(Ica, AddQuotes(Parent) + ' /grant:r *S-1-5-18:F *S-1-5-32-544:F', 'Could not set release parent ACL.');
+  RunChecked(Ica, AddQuotes(Parent) + ' /inheritance:r', 'Could not protect release parent ACL.');
   RunChecked(Ica, AddQuotes(Parent) + ' /setowner *S-1-5-32-544', 'Could not set release parent owner.');
-  RunChecked(Ica, AddQuotes(Stage) + ' /inheritance:r /T', 'Could not protect release payload ACL.');
   RunChecked(Ica, AddQuotes(Stage) + ' /grant:r *S-1-5-18:F *S-1-5-32-544:F /T', 'Could not set release payload ACL.');
+  RunChecked(Ica, AddQuotes(Stage) + ' /inheritance:r /T', 'Could not protect release payload ACL.');
   RunChecked(Ica, AddQuotes(Stage) + ' /setowner *S-1-5-32-544 /T', 'Could not set release payload owners.');
 
   CheckStageSecurity(Stage, Parent);

@@ -250,7 +250,7 @@ export function ActivityFeed({
 
   return (
     <Panel
-      title="SECURITY ACTIVITY"
+      title="Security activity"
       icon={<Activity size={15} aria-hidden="true" />}
       actions={
         onViewAll && (

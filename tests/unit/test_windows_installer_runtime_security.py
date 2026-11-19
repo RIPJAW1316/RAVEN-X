@@ -1,5 +1,7 @@
 """Exercise installer runtime selection without executing an interpreter or installer."""
 from pathlib import Path
+import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -76,17 +78,40 @@ def test_agent_installer_configures_battery_resilient_scheduled_task_settings():
     assert "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings" in source
 
 
+def test_agent_install_directories_grant_trusted_access_before_removing_inheritance():
+    source = (ROOT / "scripts" / "install-agent.ps1").read_text(encoding="utf-8")
+    block = source.split("function Protect-CodeDirectory", 1)[1].split("Assert-NotReparseTree $env:ProgramFiles", 1)[0]
+    assert block.index("'/grant:r'") < block.index("'/inheritance:r'")
+
+
+@pytest.mark.parametrize("relative", ["scripts/install-agent.ps1", "scripts/pilot/Install-PythonPortable.ps1"])
+def test_runtime_smoke_expression_survives_windows_powershell_51_native_arguments(relative):
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    expression = re.search(r" -I -c '([^']+)'", source)
+    assert expression is not None
+    python_path = sys.executable.replace("'", "''")
+    command = f"& '{python_path}' -I -c '{expression.group(1)}'; exit $LASTEXITCODE"
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, text=True, timeout=20,
+    )
+    expected = f"{sys.version_info.major}|{sys.version_info.minor}|{platform.machine()}"
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
 def test_agent_installer_verifies_release_and_tls_before_creating_agent_state():
     source = (ROOT / "scripts" / "install-agent.ps1").read_text(encoding="utf-8")
     release = source.index("Assert-VerifiedRelease $repoRoot")
     trust = source.index("backend\\agent\\trust.py")
     first_install = source.index("Protect-CodeDirectory $installParent")
-    enrollment = source.index("-m backend.agent enroll")
+    enrollment = source.index("$enrollArgs = @(")
     assert release < trust < first_install < enrollment
     assert "--no-index --no-cache-dir" in source
     assert "--require-hashes" in source
     assert "-r (Join-Path $installRoot 'requirements-agent-lock.txt')" in source
-    assert "-m backend.agent enroll" in source
+    assert "'-m', 'backend.agent', 'enroll'" in source
+    assert "& $agentPython @enrollArgs --token-stdin" in source
     assert "Bootstrap token" not in source.split("$arguments =", 1)[1]
 
 

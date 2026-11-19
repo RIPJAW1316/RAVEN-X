@@ -20,7 +20,6 @@ import {
   AsyncSection,
   Badge,
   Empty,
-  NotImplemented,
   PageHeading,
   Panel,
   SeverityBadge,
@@ -130,12 +129,14 @@ function Overview({
     <>
       <section className="stat-row">
         <Stat
+          icon={<Network size={17} />}
           label="Registered endpoints"
           value={data.endpoints.total_endpoints}
           hint={`${data.endpoints.total_endpoints} enrolled · ${data.endpoints.revoked_endpoints} revoked`}
           onClick={() => navigate("fleet")}
         />
         <Stat
+          icon={<Activity size={17} />}
           label="Reachable now"
           value={reachable}
           hint={unreachable ? `${unreachable} stale or offline` : `${data.presence.unknown} with no heartbeat`}
@@ -143,6 +144,7 @@ function Overview({
           onClick={() => navigate("fleet")}
         />
         <Stat
+          icon={<AlertTriangle size={17} />}
           label="Critical + high findings"
           value={attention}
           hint={`${data.findings.total_occurrences} total occurrences`}
@@ -150,6 +152,7 @@ function Overview({
           onClick={() => navigate("findings")}
         />
         <Stat
+          icon={<Radar size={17} />}
           label="Active assessments"
           value={activeAssessments}
           hint="Queued, dispatched or running"
@@ -159,7 +162,7 @@ function Overview({
       </section>
 
       <section className="grid-2">
-        <Panel title="OBSERVED FINDINGS" icon={<AlertTriangle size={15} aria-hidden="true" />}>
+        <Panel title="Observed findings" icon={<AlertTriangle size={15} aria-hidden="true" />}>
           <SeverityBars data={severityData} />
           <p className="panel-note">
             Counts are finding occurrences observed by completed assessments. They do not
@@ -167,7 +170,7 @@ function Overview({
           </p>
         </Panel>
 
-        <Panel title="FLEET PRESENCE" icon={<Activity size={15} aria-hidden="true" />}>
+        <Panel title="Fleet presence" icon={<Activity size={15} aria-hidden="true" />}>
           {presenceSlices.length ? (
             <Donut
               slices={presenceSlices}
@@ -192,7 +195,7 @@ function Overview({
 
       <section className="grid-2">
         <Panel
-          title="ENDPOINTS REQUIRING ATTENTION"
+          title="Endpoints requiring attention"
           icon={<ShieldCheck size={15} aria-hidden="true" />}
           actions={
             <button type="button" className="link" onClick={() => navigate("findings")}>
@@ -234,7 +237,7 @@ function Overview({
         </Panel>
 
         <Panel
-          title="RECENT ASSESSMENTS"
+          title="Recent assessments"
           icon={<Radar size={15} aria-hidden="true" />}
           actions={
             <button type="button" className="link" onClick={() => navigate("assessments")}>
@@ -279,8 +282,8 @@ function Overview({
         </Panel>
       </section>
 
-      <section className="grid-2">
-        <Panel title="ASSESSMENT PIPELINE" icon={<CalendarClock size={15} aria-hidden="true" />}>
+      <section>
+        <Panel title="Assessment pipeline" icon={<CalendarClock size={15} aria-hidden="true" />}>
           {Object.keys(data.assessments).length ? (
             <ul className="state-tally">
               {Object.entries(data.assessments)
@@ -300,12 +303,7 @@ function Overview({
           )}
         </Panel>
 
-        <Panel title="THREAT TRENDS" icon={<Activity size={15} aria-hidden="true" />}>
-          <NotImplemented
-            title="Trend chart unavailable"
-            detail="Current findings are shown above. Open recorded assessments to compare evidence from individual runs."
-          />
-        </Panel>
+
       </section>
 
       <SecurityObservability organizationId={data.organization_id} />

@@ -44,8 +44,7 @@ export function AnalystPanel({ finding }: { finding: FindingDetail }) {
         <div>
           <dt>How it was detected</dt>
           <dd>
-            {scannerPurpose ??
-              "This finding came from a scanner adapter not present in the local catalogue."}
+            {scannerPurpose ?? "The collected source and its observations are listed under Evidence."}
           </dd>
         </div>
         <div>

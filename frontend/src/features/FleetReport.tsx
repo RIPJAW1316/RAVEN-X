@@ -17,10 +17,16 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
     downloadBlob(result.blob, "ravenx-fleet-report.csv");
     return true;
   });
-  return <Panel title={endpointId ? "MACHINE EVIDENCE REPORT" : "CONSOLIDATED FLEET REPORT"} icon={<FileText size={15} />}
+  const pdf = useMutation(async () => {
+    const result = await insights.fleetPdf(organizationId, endpointId);
+    downloadBlob(result.blob, result.filename ?? `ravenx-${endpointId ? "machine" : "fleet"}-report.pdf`);
+    return true;
+  });
+  return <Panel className="print-report" title={endpointId ? "Machine evidence report" : "Consolidated fleet report"} icon={<FileText size={15} />}
     actions={<button type="button" className="ghost small" onClick={report.reload}><RefreshCw size={14} /> Refresh</button>}>
     <AsyncSection loading={report.loading} error={report.error} data={report.data} onRetry={report.reload}>
       {(data) => <>
+        <header className="print-heading"><span>RAVEN-X</span><h1>{endpointId ? data.endpoints[0]?.hostname ?? "Machine report" : "Fleet report"}</h1></header>
         <p className="panel-note">Generated {formatDateTime(data.generated_at)} · latest known assessment attempt per machine. {data.advisory_note}</p>
         <section className="stat-row">
           <Stat label="Registered" value={data.summary.total_enrolled} hint={`${data.summary.approved} approved · ${data.summary.pending_approval} awaiting approval`} />
@@ -31,9 +37,11 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
         <div className="page-actions report-actions">
           <button type="button" className="ghost" onClick={() => downloadReport(data)}><Download size={14} /> Export JSON</button>
           {!endpointId && <button type="button" className="ghost" disabled={csv.busy} onClick={() => csv.run()}><Download size={14} /> Export CSV</button>}
+          <button type="button" className="ghost" disabled={pdf.busy} onClick={() => pdf.run()}><Download size={14} /> {pdf.busy ? "Preparing PDF…" : "Download PDF"}</button>
           <button type="button" className="ghost" onClick={() => window.print()}><Printer size={14} /> Print / PDF</button>
         </div>
         {csv.error && <ErrorState error={csv.error} />}
+        {pdf.error && <ErrorState error={pdf.error} />}
         {data.endpoints.length === 0 ? <Empty title="No machines registered" detail="Enroll and approve a Windows agent to begin collecting evidence." /> :
           <div className="table-scroll"><table className="data-table"><thead><tr><th>Machine</th><th>Trust / presence</th><th>Assessment coverage</th><th>Last attempt</th><th>Findings</th></tr></thead>
             <tbody>{data.endpoints.map((row) => <tr key={row.endpoint_id}>
@@ -52,7 +60,12 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
           </tbody></table>}
           {row.findings.map((finding, index) => <article className="report-finding" key={finding.finding_id ?? index}>
             <SeverityBadge severity={normalizeSeverity(finding.severity)} /><h4>{finding.title}</h4><p>{finding.description}</p>
-            {finding.evidence.map((evidence, evidenceIndex) => <pre className="data-block" key={evidenceIndex}>{JSON.stringify(evidence, null, 2)}</pre>)}
+            {finding.evidence.map((evidence, evidenceIndex) => <dl className="evidence-values" key={evidenceIndex}>
+              {Object.entries(evidence).map(([name, value]) => <div key={name}>
+                <dt>{name.replaceAll("_", " ")}</dt>
+                <dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd>
+              </div>)}
+            </dl>)}
           </article>)}
           {row.findings_count === 0 && <p className="panel-note">{row.scan_status === "scanned" ? "No findings reported within the completed scanner coverage. This does not establish that the entire machine is secure." : "No findings in the returned evidence. Assessment coverage is incomplete or absent; this machine is not reported as clean."}</p>}
         </section>)}
@@ -72,5 +85,5 @@ function downloadBlob(blob: Blob, filename: string) {
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }

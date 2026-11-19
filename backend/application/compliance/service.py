@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from collections.abc import Mapping
 from ...domain.compliance import *
 from ...domain.endpoint import EndpointId, EndpointStatus
+from ...domain.scanner import ExecutionCompleteness, ScannerExecutionEvidence
 from ...domain.security import AuthorizationAction, AuthorizationRequest, AuthorizationResource, PrincipalType
 
 
@@ -97,8 +98,23 @@ def _matches(finding, requirement):
     metadata=finding.get("metadata",finding) if isinstance(finding,Mapping) else {}
     return str(metadata.get("scanner_id",finding.get("scanner_id", "")))==requirement.scanner_id and str(metadata.get("rule_id",finding.get("rule_id", "")))==requirement.rule_id and (requirement.resource_key is None or str(metadata.get("resource_key"))==requirement.resource_key)
 def _strong_execution(executions, requirement):
-    if not executions:return False
-    execution=executions[-1];
-    if str(execution.get("status","")).lower()!="success":return False
-    evidence=execution.get("execution_evidence"); completeness=getattr(evidence,"completeness",None); complete=getattr(completeness,"value",completeness)=="complete"
-    native=execution.get("native_metrics") or {}; return complete and not native.get("normalization_issue_count") and not native.get("partial")
+    if not executions:
+        return False
+    execution = executions[-1]
+    if str(execution.get("status", "")).lower() != "success":
+        return False
+    evidence = execution.get("execution_evidence")
+    if isinstance(evidence, Mapping):
+        try:
+            evidence = ScannerExecutionEvidence.from_dict(evidence)
+        except (KeyError, TypeError, ValueError):
+            return False
+    native = execution.get("native_metrics") or {}
+    return (
+        isinstance(evidence, ScannerExecutionEvidence)
+        and evidence.scanner_id == requirement.scanner_id
+        and evidence.completeness is ExecutionCompleteness.COMPLETE
+        and requirement.rule_id in evidence.rules_completed
+        and isinstance(native, Mapping)
+        and not any(native.get(key) for key in ("normalization_issue_count", "partial", "incomplete"))
+    )

@@ -431,7 +431,7 @@ function EndpointDetailView({
             {dispatch.error && <ErrorState error={dispatch.error} />}
 
             <section className="grid-2">
-              <Panel title="MACHINE IDENTITY" icon={<Server size={15} aria-hidden="true" />}>
+              <Panel title="Machine identity" icon={<Server size={15} aria-hidden="true" />}>
                 <DefinitionList
                   items={[
                     ["Hostname", endpoint.hostname || DASH],
@@ -446,7 +446,7 @@ function EndpointDetailView({
                 />
               </Panel>
 
-              <Panel title="AGENT & CONNECTIVITY" icon={<ShieldCheck size={15} aria-hidden="true" />}>
+              <Panel title="Agent & connectivity" icon={<ShieldCheck size={15} aria-hidden="true" />}>
                 {presence.loading && presence.data === undefined ? (
                   <Skeleton rows={3} />
                 ) : presence.error ? (
@@ -486,7 +486,7 @@ function EndpointDetailView({
             </section>
 
             <Panel
-              title="COMPLIANCE POSTURE"
+              title="Compliance posture"
               icon={<ShieldCheck size={15} aria-hidden="true" />}
               actions={
                 frameworkId && (

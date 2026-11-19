@@ -22,6 +22,7 @@ from ..domain.scanner import (
     ResourceExecutionEvidence, ScannerCapability, ScannerExecutionEvidence,
     ScannerExecutionResult, ScannerExecutionStatus, ScannerManifest,
 )
+from .windows_extended_checks import CHECKS as _EXTENDED_CHECKS, script_for
 
 
 _FIREWALL = ScannerManifest(
@@ -71,6 +72,7 @@ _SCRIPTS = {
         "Select-Object EnableSMB1Protocol,EnableSMB2Protocol | ConvertTo-Json -Compress"
     ),
 }
+_SCRIPTS.update({scanner_id: script_for(check) for scanner_id, check in _EXTENDED_CHECKS.items()})
 
 
 # A successful collection is not a healthy posture. Only the complete encrypted,
@@ -129,6 +131,8 @@ class WindowsReadOnlyScanner:
                 findings, evidence = self._bitlocker()
             elif self.manifest.scanner_id == "windows.smb":
                 findings, evidence = self._smb()
+            elif self.manifest.scanner_id in _EXTENDED_CHECKS:
+                findings, evidence = self._extended()
             else:
                 raise ValueError("scanner is not an allowlisted Windows check")
             complete = evidence.completeness is ExecutionCompleteness.COMPLETE
@@ -143,10 +147,10 @@ class WindowsReadOnlyScanner:
         except _UnsupportedCollection:
             return ScannerExecutionResult(
                 self.manifest.scanner_id, ScannerExecutionStatus.INCOMPATIBLE,
-                started, datetime.now(timezone.utc), error="BitLocker collection unavailable",
+                started, datetime.now(timezone.utc), error="Windows collection unavailable",
                 scanner_version=self.manifest.version, error_category="UNSUPPORTED",
                 execution_evidence=_evidence(self.manifest, (), (), ExecutionCompleteness.UNKNOWN,
-                                             "BitLocker collection unavailable"),
+                                             "Windows collection unavailable"),
             )
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             # Do not return stderr, registry values, or an arbitrary exception
@@ -266,6 +270,34 @@ class WindowsReadOnlyScanner:
         return findings, _evidence(self.manifest, ("smb.smb1_enabled",), ("smb.smb1_enabled",),
                                    ExecutionCompleteness.COMPLETE)
 
+    def _extended(self):
+        check = _EXTENDED_CHECKS[self.manifest.scanner_id]
+        data = self._powershell_json(self.manifest.scanner_id)
+        if not isinstance(data, dict) or set(data) != {"CollectionStatus", "Issues"}:
+            raise ValueError("collection response was not structured")
+        if data["CollectionStatus"] == "unsupported":
+            if data["Issues"] != []:
+                raise ValueError("unsupported collection reported findings")
+            raise _UnsupportedCollection()
+        issues = data["Issues"]
+        if (data["CollectionStatus"] not in {"ok", "partial"} or not isinstance(issues, list)
+                or len(issues) > len(check.rules) or len(set(str(item) for item in issues)) != len(issues)
+                or any(not isinstance(item, str) or item not in check.rules for item in issues)):
+            raise ValueError("collection issues were invalid")
+        findings = []
+        for rule_id in issues:
+            rule = check.rules[rule_id]
+            findings.append(_finding(
+                self.manifest.scanner_id, rule_id, "local", rule.severity,
+                check.category, rule.title, rule.details, check.name,
+                check.name, "detected", "not detected",
+            ))
+        rules = tuple(check.rules)
+        if data["CollectionStatus"] == "partial":
+            return findings, _evidence(self.manifest, rules, (), ExecutionCompleteness.PARTIAL,
+                                       "Windows collection incomplete")
+        return findings, _evidence(self.manifest, rules, rules, ExecutionCompleteness.COMPLETE)
+
     def _powershell_json(self, scanner_id):
         output = self._command(("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                                 _SCRIPTS[scanner_id]), 15)
@@ -314,4 +346,9 @@ def _evidence(manifest, attempted, completed, completeness, partial_reason=None,
 
 
 def windows_read_only_scanners():
-    return tuple(WindowsReadOnlyScanner(manifest) for manifest in (_FIREWALL, _UAC, _BITLOCKER, _SMB))
+    core = (_FIREWALL, _UAC, _BITLOCKER, _SMB)
+    extended = tuple(ScannerManifest(
+        scanner_id, check.name, check.description, check.category, "1.0",
+        frozenset({ScannerCapability("windows.powershell")}),
+    ) for scanner_id, check in _EXTENDED_CHECKS.items())
+    return tuple(WindowsReadOnlyScanner(manifest) for manifest in core + extended)

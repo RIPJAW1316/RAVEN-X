@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from getpass import getpass
+from getpass import GetPassWarning, getpass
 import hashlib
 import hmac
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import signal
 import sys
+import warnings
 from uuid import UUID, uuid4
 
 from ..infrastructure.security.windows_files import (
@@ -64,34 +65,74 @@ def prepare(directory: Path, ca_source: Path, expected_ca_sha256: str) -> Path:
     return target
 
 
-def enroll(*, server: str, enrollment_id: str, ca_cert: Path, data_dir: Path,
-           token_stdin: bool = False) -> str:
-    verify_directory(data_dir)
-    verify_protected_file(ca_cert)
-    store = WindowsAgentStateStore(data_dir)
-    with store.enrollment_lock():
-        if store.load_record() is not None:
-            raise AgentStateError("endpoint is already enrolled")
+def _read_hidden(prompt: str) -> str:
+    if not sys.stdin.isatty():
+        raise AgentStateError("enrollment requires an interactive console")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", GetPassWarning)
         try:
-            enrollment_id = str(UUID(enrollment_id))
-        except ValueError as error:
-            raise AgentStateError("enrollment ID must be a UUID") from error
-        token = sys.stdin.readline().rstrip("\r\n") if token_stdin else getpass("Bootstrap token: ")
-        if not token or not token.isascii() or any(char.isspace() for char in token) or len(token) > 128:
-            raise AgentStateError("bootstrap token is missing or invalid")
-        config = local_agent_config()
-        client = HttpAgentEnrollmentClient(HttpTransportConfig(server, verify=str(ca_cert)))
+            return getpass(prompt)
+        except (GetPassWarning, EOFError, KeyboardInterrupt) as error:
+            raise AgentStateError("hidden input was unavailable or cancelled") from error
+
+
+def _enrollment_id(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except ValueError as error:
+        raise AgentStateError("enrollment ID must be a UUID") from error
+
+
+def _request_enrollment(client, enrollment_id: str, *, token_stdin: bool, interactive_retry: bool):
+    config = local_agent_config()
+    attempts = 3 if interactive_retry else 1
+    for attempt in range(attempts):
+        token = sys.stdin.readline().rstrip("\r\n") if token_stdin else _read_hidden("Bootstrap token: ")
         try:
-            grant = client.enroll(
+            if not token or not token.isascii() or any(char.isspace() for char in token) or len(token) > 128:
+                if attempt + 1 == attempts:
+                    raise AgentStateError("bootstrap token is missing or invalid")
+                print("Enter the complete one-time token from the Omen Enrollment dialog.")
+                continue
+            return client.enroll(
                 enrollment_id=enrollment_id, bootstrap_token=token,
                 hostname=config.hostname, platform_name=config.platform,
                 platform_version=config.platform_version, architecture=config.architecture,
                 agent_version=AGENT_VERSION, protocol_version=str(ProtocolVersion.current()),
                 request_id=str(uuid4()), nonce=uuid4().hex,
             )
+        except HttpTransportError as error:
+            if error.status_code != 401 or error.code != "enrollment_rejected" or attempt + 1 == attempts:
+                raise
+        finally:
+            token = None
+        print("Omen rejected enrollment. Check that the ID and one-time token came from the same dialog and are still valid.")
+        replacement = _read_hidden("Enter a replacement Enrollment ID (hidden), or press Enter to keep the current ID: ")
+        if replacement:
+            try:
+                enrollment_id = _enrollment_id(replacement)
+            except AgentStateError:
+                print("The replacement was not a UUID. The current Enrollment ID is still selected.")
+            finally:
+                replacement = None
+
+
+def enroll(*, server: str, enrollment_id: str, ca_cert: Path, data_dir: Path,
+           token_stdin: bool = False, interactive_retry: bool = False) -> str:
+    verify_directory(data_dir)
+    verify_protected_file(ca_cert)
+    store = WindowsAgentStateStore(data_dir)
+    with store.enrollment_lock():
+        if store.load_record() is not None:
+            raise AgentStateError("endpoint is already enrolled")
+        enrollment_id = _enrollment_id(enrollment_id)
+        client = HttpAgentEnrollmentClient(HttpTransportConfig(server, verify=str(ca_cert)))
+        try:
+            grant = _request_enrollment(
+                client, enrollment_id, token_stdin=token_stdin, interactive_retry=interactive_retry,
+            )
         finally:
             client.close()
-            token = None
         if grant.protocol_version != str(ProtocolVersion.current()):
             raise AgentStateError("server selected an unsupported protocol version")
         record = store.save_enrollment(grant, server_url=server, ca_sha256=ca_certificate_digest(ca_cert))
@@ -110,7 +151,9 @@ def main(argv=None) -> int:
     setup.add_argument("--enrollment-id", required=True)
     setup.add_argument("--ca-cert", required=True)
     setup.add_argument("--data-dir")
-    setup.add_argument("--token-stdin", action="store_true", help="read token from standard input instead of hidden prompt")
+    token_input = setup.add_mutually_exclusive_group()
+    token_input.add_argument("--token-stdin", action="store_true", help="read token from standard input instead of hidden prompt")
+    token_input.add_argument("--interactive-retry", action="store_true", help="allow up to three interactive enrollment attempts")
     foreground = subcommands.add_parser("run", help="start the foreground agent")
     foreground.add_argument("--server", required=True)
     foreground.add_argument("--ca-cert", required=True)
@@ -126,7 +169,7 @@ def main(argv=None) -> int:
             endpoint = enroll(
                 server=arguments.server, enrollment_id=arguments.enrollment_id,
                 ca_cert=Path(arguments.ca_cert), data_dir=directory,
-                token_stdin=arguments.token_stdin,
+                token_stdin=arguments.token_stdin, interactive_retry=arguments.interactive_retry,
             )
             print(f"Endpoint enrolled: {endpoint}. Approval is required before assessments.")
         else:

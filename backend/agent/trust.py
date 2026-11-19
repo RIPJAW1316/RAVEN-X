@@ -63,6 +63,20 @@ def check_server_trust(server_url: str, ca_path: Path, expected_sha256: str,
             connection.connect()
         finally:
             connection.close()
+    except ssl.SSLCertVerificationError as error:
+        messages = {
+            9: "Omen certificate is not valid yet. Check the clocks on both computers.",
+            10: "Omen certificate has expired. Check both clocks and the certificate validity dates.",
+            62: "Omen certificate does not match the hostname entered in Setup.",
+            64: "Omen certificate does not match the IP address entered in Setup.",
+        }
+        raise AgentTrustError(messages.get(
+            error.verify_code, "Omen certificate chain could not be verified with the selected CA."
+        )) from error
+    except (TimeoutError, ConnectionRefusedError) as error:
+        raise AgentTrustError(
+            "Could not connect to Omen. Check the HTTPS address and port (normally 8443) and confirm the server is running."
+        ) from error
     except (UnicodeError, ValueError, ssl.SSLError, OSError) as error:
         # Do not copy remote responses, addresses or certificate detail to logs.
         raise AgentTrustError("HTTPS server trust verification failed") from error

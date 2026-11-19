@@ -50,7 +50,7 @@ export function Enrollment({ organizationId, navigate }: {
       <div><ShieldCheck size={21} /><span><strong>03 · Approve</strong><small>Confirm the machine, then permit scans.</small></span></div>
     </div>
 
-    <Panel title="AWAITING YOUR APPROVAL" icon={<ShieldCheck size={15} />}>
+    <Panel title="Awaiting your approval" icon={<ShieldCheck size={15} />}>
       <AsyncSection loading={pending.loading} error={pending.error} data={pending.data} onRetry={pending.reload}>
         {(data) => data.items.length === 0 ? <Empty title="No machines awaiting approval"
           detail="An agent appears here after redeeming its token. Registration permits heartbeat only; approval permits assessment work." /> :
@@ -63,7 +63,7 @@ export function Enrollment({ organizationId, navigate }: {
       </AsyncSection>
     </Panel>
 
-    <Panel title="SINGLE-USE ENROLLMENT TOKENS" icon={<KeyRound size={15} />}>
+    <Panel title="Single-use enrollment tokens" icon={<KeyRound size={15} />}>
       {revoke.error && <ErrorState error={revoke.error} />}
       <AsyncSection loading={tokens.loading} error={tokens.error} data={tokens.data} onRetry={tokens.reload}
         empty={<Empty title="No enrollment tokens" detail="Issue a token for the Dell or HP notebook. The secret is displayed once and expires automatically." />}>

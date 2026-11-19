@@ -78,7 +78,7 @@ export function Findings({
         {(data) => (
           <>
             <section className="grid-2">
-              <Panel title="SEVERITY DISTRIBUTION" icon={<AlertTriangle size={15} aria-hidden="true" />}>
+              <Panel title="Severity distribution" icon={<AlertTriangle size={15} aria-hidden="true" />}>
                 <SeverityBars data={severityData} />
                 <p className="panel-note">
                   {data.findings.total_occurrences.toLocaleString()} total occurrences across all
@@ -86,7 +86,7 @@ export function Findings({
                 </p>
               </Panel>
 
-              <Panel title="BACKLOG QUERY" icon={<ShieldAlert size={15} aria-hidden="true" />}>
+              <Panel title="Backlog query" icon={<ShieldAlert size={15} aria-hidden="true" />}>
                 <NotImplemented
                   title="Recent critical and high findings"
                   detail="This list covers recent high-severity findings. Open an assessment to inspect its complete findings and evidence."
@@ -95,7 +95,7 @@ export function Findings({
             </section>
 
             <Panel
-              title="RECENT HIGH-SEVERITY FINDINGS"
+              title="Recent high-severity findings"
               icon={<ShieldAlert size={15} aria-hidden="true" />}
               actions={<span className="panel-meta">{recent.length} shown</span>}
             >

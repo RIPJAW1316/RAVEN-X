@@ -114,14 +114,14 @@ def test_wrong_ca_or_substituted_bundle_pair_fails_tls(tmp_path, substituted_has
 def test_wrong_host_ip_fails_hostname_verification(tmp_path):
     ca, cert, key = _certificates(tmp_path / "host")
     with _server(cert, key) as port:
-        with pytest.raises(AgentTrustError, match="HTTPS server trust"):
+        with pytest.raises(AgentTrustError, match="does not match the IP address"):
             check_server_trust(f"https://127.0.0.2:{port}", ca, _hash(ca))
 
 
 def test_expired_server_certificate_is_rejected(tmp_path):
     ca, cert, key = _certificates(tmp_path / "expired", expired=True)
     with _server(cert, key) as port:
-        with pytest.raises(AgentTrustError, match="HTTPS server trust"):
+        with pytest.raises(AgentTrustError, match="certificate has expired"):
             check_server_trust(f"https://127.0.0.1:{port}", ca, _hash(ca))
 
 
@@ -131,7 +131,7 @@ def test_unreachable_server_is_rejected(tmp_path):
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
     listener.close()
-    with pytest.raises(AgentTrustError, match="HTTPS server trust"):
+    with pytest.raises(AgentTrustError, match="Check the HTTPS address and port"):
         check_server_trust(f"https://127.0.0.1:{port}", ca, _hash(ca), timeout=0.5)
 
 

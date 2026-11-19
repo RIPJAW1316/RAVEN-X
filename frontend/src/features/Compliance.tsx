@@ -6,7 +6,7 @@
  */
 import { Camera, ClipboardCheck, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
-import { compliance } from "../api/endpoints";
+import { compliance, fleet } from "../api/endpoints";
 import { Donut, Meter } from "../components/charts";
 import {
   AsyncSection,
@@ -15,6 +15,7 @@ import {
   Drawer,
   Empty,
   ErrorState,
+  Field,
   PageHeading,
   Panel,
   Skeleton,
@@ -24,7 +25,7 @@ import {
 } from "../components/ui";
 import { useApi, useMutation } from "../hooks/useApi";
 import { COMPLIANCE_LABEL } from "../lib/domain";
-import { formatDateTime, formatRelative, percent } from "../lib/format";
+import { formatDateTime, formatRelative, percent, titleCase } from "../lib/format";
 import { scannerName } from "../lib/scanners";
 import type { ComplianceControl, CompliancePosture } from "../types/api";
 
@@ -35,13 +36,16 @@ const STATUS_COLORS: Record<string, string> = {
   not_applicable: "var(--muted)",
 };
 
-export function Compliance({ organizationId }: { organizationId: string }) {
+type Navigate = (section: string, ...params: string[]) => void;
+
+export function Compliance({ organizationId, navigate }: { organizationId: string; navigate: Navigate }) {
   const frameworks = useApi(
     (signal) => compliance.frameworks(organizationId, signal),
     [organizationId],
   );
   const [frameworkId, setFrameworkId] = useState<string | null>(null);
-  const active = frameworkId ?? frameworks.data?.[0]?.framework_id ?? null;
+  const active = frameworks.data?.find((item) => item.framework_id === frameworkId)?.framework_id ??
+    frameworks.data?.[0]?.framework_id;
 
   return (
     <>
@@ -75,7 +79,7 @@ export function Compliance({ organizationId }: { organizationId: string }) {
                 }))}
               />
             )}
-            {active && <FrameworkView organizationId={organizationId} frameworkId={active} />}
+            {active && <FrameworkView key={active} organizationId={organizationId} frameworkId={active} navigate={navigate} />}
           </>
         )}
       </AsyncSection>
@@ -86,9 +90,11 @@ export function Compliance({ organizationId }: { organizationId: string }) {
 function FrameworkView({
   organizationId,
   frameworkId,
+  navigate,
 }: {
   organizationId: string;
   frameworkId: string;
+  navigate: Navigate;
 }) {
   const framework = useApi(
     (signal) => compliance.framework(organizationId, frameworkId, signal),
@@ -116,111 +122,116 @@ function FrameworkView({
   return (
     <>
       <section className="grid-2">
-        <Panel title="POSTURE" icon={<ShieldCheck size={15} aria-hidden="true" />}>
+        <Panel title={framework.data?.name ?? "Framework posture"} icon={<ShieldCheck size={15} aria-hidden="true" />}>
           {summary.loading && summary.data === undefined ? (
             <Skeleton rows={4} />
           ) : summary.error ? (
             <ErrorState error={summary.error} onRetry={summary.reload} />
           ) : summary.data ? (
             <PostureView posture={summary.data} />
-          ) : null}
+          ) : (
+            <Empty compact title="Posture unavailable" detail="The server did not return an evaluation summary." />
+          )}
         </Panel>
 
-        <Panel
-          title="IMMUTABLE HISTORY"
-          icon={<Camera size={15} aria-hidden="true" />}
-          actions={
-            <button
-              type="button"
-              className="ghost"
-              disabled={capture.busy}
-              onClick={async () => {
-                const result = await capture.run();
-                if (result) {
-                  setCaptured(true);
-                  snapshots.reload();
-                }
-              }}
-            >
-              {capture.busy ? "Capturing…" : "Capture snapshot"}
-            </button>
-          }
-        >
-          {capture.error && <ErrorState error={capture.error} />}
-          {captured && <SuccessNote>Snapshot captured and stored immutably.</SuccessNote>}
-          {snapshots.loading && snapshots.data === undefined ? (
-            <Skeleton rows={3} />
-          ) : snapshots.error ? (
-            <ErrorState error={snapshots.error} onRetry={snapshots.reload} />
-          ) : snapshotItems.length ? (
-            <ul className="snapshot-list">
-              {snapshotItems.slice(0, 8).map((snapshot, index) => {
-                const id = String(snapshot.snapshot_id ?? index);
-                const at = snapshot.captured_at ?? snapshot.created_at ?? null;
-                return (
-                  <li key={id}>
-                    <div>
-                      <strong>{formatDateTime(at)}</strong>
-                      <small className="mono">{id.slice(0, 8)}</small>
-                    </div>
-                    <span className="snapshot-counts">
-                      <b className="tone-ok">{snapshot.compliant ?? "—"}</b>
-                      <b className="tone-critical">{snapshot.non_compliant ?? "—"}</b>
-                      <b className="tone-warn">{snapshot.unknown ?? "—"}</b>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <Empty
-              compact
-              title="No snapshots captured"
-              detail="Capture a snapshot to create an immutable record of current posture."
-            />
-          )}
+        <Panel title="Controls" icon={<ClipboardCheck size={15} aria-hidden="true" />}>
+          {framework.loading && framework.data === undefined ? (
+            <Skeleton rows={4} />
+          ) : framework.error ? (
+            <ErrorState error={framework.error} onRetry={framework.reload} />
+          ) : framework.data ? (
+            <>
+              <p className="panel-note">{framework.data.description}</p>
+              {framework.data.controls?.length ? (
+                <ul className="control-list">
+                  {framework.data.controls.map((control) => (
+                    <li key={control.control_id}>
+                      <Badge tone={control.capability === "full" ? "ok" : "info"}>
+                        {control.capability === "full" ? "Full" : "Detection"}
+                      </Badge>
+                      <div>
+                        <button
+                          type="button"
+                          className="link strong"
+                          onClick={() => setSelectedControl(control)}
+                        >
+                          {control.title}
+                        </button>
+                        <small className="mono">{control.control_id}</small>
+                      </div>
+                      <span className="control-age">
+                        {control.applicability_platform ?? "Any platform"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="panel-note">
+                  This framework declares {framework.data.control_ids?.length ?? 0} control(s); the detail
+                  route did not return their definitions.
+                </p>
+              )}
+            </>
+          ) : null}
         </Panel>
       </section>
 
-      <Panel title="CONTROLS" icon={<ClipboardCheck size={15} aria-hidden="true" />}>
-        {framework.loading && framework.data === undefined ? (
-          <Skeleton rows={4} />
-        ) : framework.error ? (
-          <ErrorState error={framework.error} onRetry={framework.reload} />
-        ) : framework.data ? (
-          <>
-            <p className="panel-note">{framework.data.description}</p>
-            {framework.data.controls?.length ? (
-              <ul className="control-list">
-                {framework.data.controls.map((control) => (
-                  <li key={control.control_id}>
-                    <Badge tone={control.capability === "full" ? "ok" : "info"}>
-                      {control.capability === "full" ? "Full" : "Detection"}
-                    </Badge>
-                    <div>
-                      <button
-                        type="button"
-                        className="link strong"
-                        onClick={() => setSelectedControl(control)}
-                      >
-                        {control.title}
-                      </button>
-                      <small className="mono">{control.control_id}</small>
-                    </div>
-                    <span className="control-age">
-                      {control.applicability_platform ?? "Any platform"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="panel-note">
-                This framework declares {framework.data.control_ids.length} control(s); the detail
-                route did not return their definitions.
-              </p>
-            )}
-          </>
-        ) : null}
+      <MachineEvaluations organizationId={organizationId} frameworkId={frameworkId}
+        controls={framework.data?.controls ?? []} navigate={navigate} />
+
+      <Panel
+        title="Immutable history"
+        icon={<Camera size={15} aria-hidden="true" />}
+        actions={
+          <button
+            type="button"
+            className="ghost"
+            disabled={capture.busy}
+            onClick={async () => {
+              const result = await capture.run();
+              if (result) {
+                setCaptured(true);
+                snapshots.reload();
+              }
+            }}
+          >
+            {capture.busy ? "Capturing…" : "Capture snapshot"}
+          </button>
+        }
+      >
+        {capture.error && <ErrorState error={capture.error} />}
+        {captured && <SuccessNote>Snapshot captured and stored immutably.</SuccessNote>}
+        {snapshots.loading && snapshots.data === undefined ? (
+          <Skeleton rows={3} />
+        ) : snapshots.error ? (
+          <ErrorState error={snapshots.error} onRetry={snapshots.reload} />
+        ) : snapshotItems.length ? (
+          <ul className="snapshot-list">
+            {snapshotItems.slice(0, 8).map((snapshot, index) => {
+              const id = String(snapshot.snapshot_id ?? index);
+              const at = snapshot.captured_at ?? snapshot.created_at ?? null;
+              return (
+                <li key={id}>
+                  <div>
+                    <strong>{formatDateTime(at)}</strong>
+                    <small className="mono">{id.slice(0, 8)}</small>
+                  </div>
+                  <span className="snapshot-counts">
+                    <b className="tone-ok">{snapshot.compliant ?? "—"} compliant</b>
+                    <b className="tone-critical">{snapshot.non_compliant ?? "—"} non-compliant</b>
+                    <b className="tone-warn">{snapshot.unknown ?? "—"} unknown</b>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <Empty
+            compact
+            title="No snapshots captured"
+            detail="Capture a snapshot to create an immutable record of current posture."
+          />
+        )}
       </Panel>
 
       <Drawer
@@ -270,6 +281,62 @@ function FrameworkView({
   );
 }
 
+function MachineEvaluations({ organizationId, frameworkId, controls, navigate }: {
+  organizationId: string; frameworkId: string; controls: ComplianceControl[]; navigate: Navigate;
+}) {
+  const [chosen, setChosen] = useState("");
+  const machines = useApi((signal) => fleet.query(organizationId, { limit: 100 }, signal), [organizationId]);
+  const items = machines.data?.items.filter((machine) => machine.lifecycle_status !== "revoked") ?? [];
+  const endpointId = (items.find((machine) => machine.endpoint_id === chosen) ?? items[0])?.endpoint_id;
+  return (
+    <Panel title="Machine evaluations">
+      <AsyncSection loading={machines.loading} data={machines.data} error={machines.error} onRetry={machines.reload}>
+        {(data) => endpointId ? <>
+          <Field label="Machine">
+            <select value={endpointId} onChange={(event) => setChosen(event.target.value)}>
+              {items.map((machine) => (
+                <option key={machine.endpoint_id} value={machine.endpoint_id}>{machine.hostname}</option>
+              ))}
+            </select>
+          </Field>
+          {data.total > data.items.length && <p className="panel-note">Showing the first {data.items.length} fleet records.</p>}
+          <MachineControlRows key={endpointId} organizationId={organizationId} frameworkId={frameworkId}
+            endpointId={endpointId} controls={controls} navigate={navigate} />
+        </> : <Empty compact title="No machines available" detail="Enroll a machine to view its control evaluations." />}
+      </AsyncSection>
+    </Panel>
+  );
+}
+
+function MachineControlRows({ organizationId, frameworkId, endpointId, controls, navigate }: {
+  organizationId: string; frameworkId: string; endpointId: string;
+  controls: ComplianceControl[]; navigate: Navigate;
+}) {
+  const evaluations = useApi(
+    (signal) => compliance.endpointEvaluation(organizationId, endpointId, frameworkId, signal),
+    [organizationId, endpointId, frameworkId],
+  );
+  return (
+    <AsyncSection loading={evaluations.loading} data={evaluations.data} error={evaluations.error}
+      onRetry={evaluations.reload}
+      empty={<Empty compact title="No evaluations returned" detail="The server returned no control results for this machine." />}>
+      {(rows) => <div className="table-scroll"><table className="data-table">
+        <thead><tr><th>Control</th><th>Status</th><th>Evidence</th><th>Assessment</th></tr></thead>
+        <tbody>{rows.map((row) => <tr key={row.control_id}>
+          <td>{controls.find((control) => control.control_id === row.control_id)?.title ?? row.control_id}</td>
+          <td><Badge tone={row.status === "compliant" ? "ok" : row.status === "non_compliant" ? "critical" : row.status === "unknown" ? "warn" : "neutral"}>
+            {COMPLIANCE_LABEL[row.status]}
+          </Badge></td>
+          <td>{row.evidence_summary || titleCase(row.reason)}</td>
+          <td>{row.source_assessment_id
+            ? <button type="button" className="link" onClick={() => navigate("assessments", row.source_assessment_id!)}>View assessment</button>
+            : "No source assessment"}</td>
+        </tr>)}</tbody>
+      </table></div>}
+    </AsyncSection>
+  );
+}
+
 function PostureView({ posture }: { posture: CompliancePosture }) {
   const total =
     posture.compliant + posture.non_compliant + posture.unknown + posture.not_applicable;
@@ -287,7 +354,7 @@ function PostureView({ posture }: { posture: CompliancePosture }) {
       {slices.length ? (
         <Donut
           slices={slices}
-          centerValue={`${assessable ? percent(posture.compliant, assessable) : 0}%`}
+          centerValue={assessable ? `${percent(posture.compliant, assessable)}%` : "—"}
           centerLabel="OF ASSESSABLE"
         />
       ) : (

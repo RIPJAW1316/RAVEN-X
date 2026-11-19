@@ -7,4 +7,5 @@ PyYAML==6.0.3
 httpx==0.28.1
 pydantic==2.12.5
 cryptography==50.0.2
+reportlab==4.4.9
 pywin32==312; sys_platform == "win32"

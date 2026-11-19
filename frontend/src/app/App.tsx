@@ -12,6 +12,7 @@ import {
   ChevronDown,
   Command,
   FileCheck2,
+  Feather,
   LayoutDashboard,
   LogOut,
   Network,
@@ -26,14 +27,13 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiError, session } from "../api/client";
 import { auth } from "../api/endpoints";
-import { Empty, ErrorState, Toast } from "../components/ui";
+import { Empty, ErrorState, SelectionHighlight, Toast } from "../components/ui";
 import { useApi } from "../hooks/useApi";
 import { buildHref, useRoute } from "../hooks/useRoute";
 import { Activity as ActivityPage } from "../features/Activity";
-import { Analyst } from "../features/AnalystPage";
 import { Assessments } from "../features/Assessments";
 import { CommandCenter } from "../features/CommandCenter";
 import { Compliance } from "../features/Compliance";
@@ -44,6 +44,8 @@ import { Groups } from "../features/Groups";
 import { Reports } from "../features/Reports";
 import { Schedules } from "../features/Schedules";
 import { Settings } from "../features/Settings";
+
+const Analyst = lazy(() => import("../features/AnalystPage").then(({ Analyst }) => ({ default: Analyst })));
 
 interface NavItem {
   id: string;
@@ -141,7 +143,7 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
           RAVEN<span>-X</span>
         </div>
         <p className="eyebrow">Community Edition · Local security operations</p>
-        <h1>Your fleet. Your evidence.</h1>
+        <h1>Sign in to your workspace</h1>
         <label>
           Email
           <input
@@ -244,7 +246,7 @@ function Workspace({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="app-shell">
       <div className={reduced ? "ambient reduced" : "ambient"} aria-hidden="true" />
-      <Sidebar active={active} />
+      <Sidebar active={active} navigate={navigate} />
       <main className="workspace">
         <Topbar
           organizations={organizations.data ?? []}
@@ -338,9 +340,13 @@ function Screen({
     case "activity":
       return <ActivityPage organizationId={organizationId} />;
     case "analyst":
-      return <Analyst key={organizationId} organizationId={organizationId} navigate={navigate} />;
+      return (
+        <Suspense fallback={<div className="page-loading" role="status">Loading AI Analyst…</div>}>
+          <Analyst key={organizationId} organizationId={organizationId} navigate={navigate} />
+        </Suspense>
+      );
     case "compliance":
-      return <Compliance organizationId={organizationId} />;
+      return <Compliance organizationId={organizationId} navigate={navigate} />;
     case "reports":
       return <Reports key={organizationId} organizationId={organizationId} endpointId={params[0]} navigate={navigate} />;
     case "settings":
@@ -353,17 +359,28 @@ function Screen({
 
 /* ---------------------------------------------------------------- chrome */
 
-function Sidebar({ active }: { active: string }) {
+function Sidebar({ active, navigate }: { active: string; navigate: (section: string) => void }) {
   return (
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
-          R
+          <Feather size={22} strokeWidth={1.7} />
         </span>
         <span>
           RAVEN<span>-X</span>
         </span>
       </div>
+      <label className="compact-navigation">
+        <span className="sr-only">Go to screen</span>
+        <select value={active} onChange={(event) => navigate(event.target.value)}>
+          {NAVIGATION.map((group) => (
+            <optgroup key={group.label} label={group.label || "Workspace"}>
+              {group.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </optgroup>
+          ))}
+        </select>
+        <ChevronDown size={14} aria-hidden="true" />
+      </label>
       <nav aria-label="Primary">
         {NAVIGATION.map((group, index) => (
           <div key={group.label || `group-${index}`}>
@@ -374,9 +391,12 @@ function Sidebar({ active }: { active: string }) {
                 <a
                   key={item.id}
                   href={buildHref(item.id)}
+                  aria-label={item.label}
+                  title={item.label}
                   className={active === item.id ? "nav active" : "nav"}
                   aria-current={active === item.id ? "page" : undefined}
                 >
+                  {active === item.id && <SelectionHighlight group="primary-navigation" />}
                   <Icon size={16} aria-hidden="true" />
                   <span>{item.label}</span>
                 </a>

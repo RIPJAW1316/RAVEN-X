@@ -57,3 +57,23 @@ def test_lan_plaintext_launcher_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as failure:
         main(["serve", "--data-dir", str(tmp_path), "--host", "0.0.0.0", "--local-http"])
     assert failure.value.code == 2
+
+
+def test_launcher_bootstrap_reads_password_only_from_stdin(tmp_path, monkeypatch, capsys):
+    from io import StringIO
+
+    password = "Test-only pipe password! ä"
+    monkeypatch.setattr("backend.cli.prepare_data_dir", lambda path: path)
+    monkeypatch.setattr("backend.cli.sys.stdin", StringIO(password + "\n"))
+    monkeypatch.setattr("backend.cli.getpass.getpass", lambda _: pytest.fail("prompt opened"))
+    assert main([
+        "bootstrap", "--data-dir", str(tmp_path), "--email", "pipe@example.test",
+        "--organization", "Pilot fixture", "--password-stdin",
+    ]) == 0
+    assert password not in capsys.readouterr().out
+    database = DatabaseManager()
+    try:
+        auth = HumanAuthenticationService(SQLAlchemyUserRepository(database))
+        assert auth.authenticate("pipe@example.test", password).principal is not None
+    finally:
+        database.close()

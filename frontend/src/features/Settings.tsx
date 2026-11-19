@@ -6,6 +6,7 @@
  * endpoints and are declared as such rather than rendered as dead controls.
  * See docs/frontend-api-gaps.md (GAP-6, GAP-7).
  */
+import { Appearance } from "../components/Appearance";
 import { Building2, KeyRound, ShieldCheck, UserMinus, UserPlus, Users } from "lucide-react";
 import { useState } from "react";
 import { auth, organizations } from "../api/endpoints";
@@ -57,8 +58,10 @@ export function Settings({ organizationId }: { organizationId: string }) {
         description="Organization profile and access administration."
       />
 
+      <Appearance />
+
       <section className="grid-2">
-        <Panel title="ORGANIZATION" icon={<Building2 size={15} aria-hidden="true" />}>
+        <Panel title="Organization" icon={<Building2 size={15} aria-hidden="true" />}>
           <AsyncSection
             loading={organization.loading}
             error={organization.error}
@@ -85,7 +88,7 @@ export function Settings({ organizationId }: { organizationId: string }) {
           </AsyncSection>
         </Panel>
 
-        <Panel title="YOUR SESSION" icon={<ShieldCheck size={15} aria-hidden="true" />}>
+        <Panel title="Your session" icon={<ShieldCheck size={15} aria-hidden="true" />}>
           {me.loading && me.data === undefined ? (
             <Skeleton rows={3} />
           ) : me.error ? (
@@ -115,7 +118,7 @@ export function Settings({ organizationId }: { organizationId: string }) {
       </section>
 
       <Panel
-        title="MEMBERSHIPS"
+        title="Memberships"
         icon={<Users size={15} aria-hidden="true" />}
         actions={
           <button type="button" className="ghost" onClick={() => setInviteOpen(true)}>
@@ -191,14 +194,14 @@ export function Settings({ organizationId }: { organizationId: string }) {
       </Panel>
 
       <section className="grid-2">
-        <Panel title="ROLES & PERMISSIONS" icon={<KeyRound size={15} aria-hidden="true" />}>
+        <Panel title="Roles & permissions" icon={<KeyRound size={15} aria-hidden="true" />}>
           <NotImplemented
             title="Role editing unavailable"
             detail="Your assigned organization permissions are enforced. Contact the server administrator to change role assignments."
           />
         </Panel>
 
-        <Panel title="AGENTS & INTEGRATIONS" icon={<ShieldCheck size={15} aria-hidden="true" />}>
+        <Panel title="Agents & integrations" icon={<ShieldCheck size={15} aria-hidden="true" />}>
           <p className="panel-note">Issue a single-use token, review the connecting machine, and approve its identity before any assessment can run.</p>
           <a className="ghost" href="#/enrollment">Open enrollment desk</a>
         </Panel>

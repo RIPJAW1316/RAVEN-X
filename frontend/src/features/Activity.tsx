@@ -17,7 +17,7 @@ export function Activity({ organizationId }: { organizationId: string }) {
         title="Activity"
         description="Durable record of security-relevant actions in this organization, newest first."
       />
-      <Panel title="AUDIT TRAIL" icon={<ActivityIcon size={15} aria-hidden="true" />}>
+      <Panel title="Audit trail" icon={<ActivityIcon size={15} aria-hidden="true" />}>
         <ActivityFeed organizationId={organizationId} pageSize={25} />
         <p className="panel-note">
           Events are append-only and scoped to this organization. Metadata is reduced to an

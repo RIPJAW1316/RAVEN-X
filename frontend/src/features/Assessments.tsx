@@ -456,7 +456,7 @@ function AssessmentDetailView({
             {cancel.error && <ErrorState error={cancel.error} />}
 
             <section className="grid-2">
-              <Panel title="RUN DETAIL" icon={<Radar size={15} aria-hidden="true" />}>
+              <Panel title="Run detail" icon={<Radar size={15} aria-hidden="true" />}>
                 <DefinitionList
                   items={[
                     [
@@ -507,7 +507,7 @@ function AssessmentDetailView({
                 )}
               </Panel>
 
-              <Panel title="SCANNER EXECUTION" icon={<FileSearch size={15} aria-hidden="true" />}>
+              <Panel title="Scanner execution" icon={<FileSearch size={15} aria-hidden="true" />}>
                 {detail.loading && detail.data === undefined ? (
                   <Skeleton rows={3} />
                 ) : detail.error ? (
@@ -670,7 +670,7 @@ function Findings({
 
   return (
     <Panel
-      title="FINDINGS"
+      title="Findings"
       icon={<ShieldAlert size={15} aria-hidden="true" />}
       actions={
         total > 0 && (
@@ -779,7 +779,9 @@ function FindingDrawer({
                         {Object.entries(item.values).map(([key, value]) => (
                           <div key={key}>
                             <dt>{key}</dt>
-                            <dd className="mono">{String(value)}</dd>
+                            <dd className="mono">{typeof value === "object" && value !== null
+                              ? <pre className="data-block">{JSON.stringify(value, null, 2)}</pre>
+                              : String(value)}</dd>
                           </div>
                         ))}
                       </dl>

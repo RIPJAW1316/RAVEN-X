@@ -87,6 +87,19 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
         return _report_response(dependencies.report_service, principal, context,
                                 endpoint_id=endpoint_id, assessment_ids=assessment_id)
 
+    @router.get("/organizations/{organization_id}/reports/fleet.pdf", tags=["Tenant Reports"])
+    def fleet_report_pdf(assessment_id: list[str] | None = Query(default=None),
+                         human=Depends(organization_context)):
+        principal, context = human
+        return _pdf_response(dependencies.report_service, principal, context, assessment_ids=assessment_id)
+
+    @router.get("/organizations/{organization_id}/endpoints/{endpoint_id}/report.pdf", tags=["Tenant Reports"])
+    def endpoint_report_pdf(endpoint_id: str, assessment_id: list[str] | None = Query(default=None),
+                            human=Depends(organization_context)):
+        principal, context = human
+        return _pdf_response(dependencies.report_service, principal, context,
+                             endpoint_id=endpoint_id, assessment_ids=assessment_id)
+
     @router.post("/organizations/{organization_id}/ai/analyze", tags=["Local AI"])
     async def analyze(request: Request, human=Depends(organization_context)):
         if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/json":
@@ -136,6 +149,17 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
 def _report_response(service, principal, context, **selection):
     return JSONResponse(_build_report(service, principal, context, **selection),
                         headers={"Cache-Control": "no-store"})
+
+
+def _pdf_response(service, principal, context, **selection):
+    report = _build_report(service, principal, context, **selection)
+    from ..application.reporting.fleet_pdf import render_fleet_pdf
+
+    kind = "machine" if report["scope"]["kind"] == "endpoint" else "fleet"
+    return Response(render_fleet_pdf(report), media_type="application/pdf", headers={
+        "Cache-Control": "no-store",
+        "Content-Disposition": f'attachment; filename="ravenx-{kind}-report.pdf"',
+    })
 
 
 def _build_report(service, principal, context, **selection):

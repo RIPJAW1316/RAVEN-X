@@ -90,17 +90,20 @@ def test_http_bootstrap_is_single_use_tenant_bound_and_requires_approval(tmp_pat
     assert limited_agent.post("/api/v1/agent/work", headers=work_headers).status_code == 403
     assert limited_agent.post("/api/v1/agent/work", headers=work_headers).status_code == 429
     endpoints = SQLAlchemyEndpointRepository(manager)
+    # The HTTP handler timestamps enrollment after the request starts. Anchor
+    # lifecycle transitions to the stored creation time even on slow runners.
+    enrolled_at = endpoints.get_for_organization(payload["endpoint_id"], organization_id).created_at
     endpoints.transition_status_for_organization(payload["endpoint_id"], organization_id,
-                                                  (EndpointStatus.NEW,), EndpointStatus.ACTIVE, now + timedelta(seconds=1))
+                                                  (EndpointStatus.NEW,), EndpointStatus.ACTIVE, enrolled_at + timedelta(seconds=1))
     assert client.post("/api/v1/agent/work", headers=work_headers).status_code == 200
     endpoints.transition_status_for_organization(payload["endpoint_id"], organization_id,
-                                                  (EndpointStatus.ACTIVE,), EndpointStatus.DEGRADED, now + timedelta(seconds=2))
+                                                  (EndpointStatus.ACTIVE,), EndpointStatus.DEGRADED, enrolled_at + timedelta(seconds=2))
     assert client.post("/api/v1/agent/work", headers=work_headers).status_code == 403
     endpoints.transition_status_for_organization(payload["endpoint_id"], organization_id,
-                                                  (EndpointStatus.DEGRADED,), EndpointStatus.OFFLINE, now + timedelta(seconds=3))
+                                                  (EndpointStatus.DEGRADED,), EndpointStatus.OFFLINE, enrolled_at + timedelta(seconds=3))
     assert client.post("/api/v1/agent/work", headers=work_headers).status_code == 403
     endpoints.transition_status_for_organization(payload["endpoint_id"], organization_id,
-                                                  (EndpointStatus.OFFLINE,), EndpointStatus.REVOKED, now + timedelta(seconds=4))
+                                                  (EndpointStatus.OFFLINE,), EndpointStatus.REVOKED, enrolled_at + timedelta(seconds=4))
     assert client.post("/api/v1/agent/work", headers=work_headers).status_code == 401
     manager.close()
 

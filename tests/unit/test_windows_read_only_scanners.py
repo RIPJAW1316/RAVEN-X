@@ -298,7 +298,8 @@ def test_four_check_findings_survive_orchestration_and_existing_wire_contract():
 
     values = {"EnableLUA": 0, "ConsentPromptBehaviorAdmin": 2, "PromptOnSecureDesktop": 1}
     scanners = tuple(WindowsReadOnlyScanner(x.manifest, runner=run, registry_reader=values.__getitem__)
-                     for x in windows_read_only_scanners())
+                     for x in windows_read_only_scanners()
+                     if x.manifest.scanner_id in {"windows.firewall", "windows.uac", "windows.bitlocker", "windows.smb"})
     result = LocalAssessmentOrchestrator(ScannerRegistry(scanners), lambda target: CAPABILITIES).run(
         TARGET, tuple(x.manifest.scanner_id for x in scanners))
     wire = json.loads(json.dumps(AssessmentResultPayload.from_assessment_result(result).to_dict()))
