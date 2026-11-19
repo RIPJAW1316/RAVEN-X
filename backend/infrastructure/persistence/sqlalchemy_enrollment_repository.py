@@ -31,6 +31,7 @@ from ...domain.enrollment import (
     EnrollmentStatus,
 )
 from ...domain.organization import OrganizationId
+from ...domain.enrollment.models import ENROLLMENT_RENEWAL_MAX_AGE, ENROLLMENT_RENEWAL_TTL
 from ...infrastructure.security import verify_secret
 from .endpoint_mappers import endpoint_to_record, record_to_endpoint
 from .enrollment_mappers import (
@@ -75,13 +76,35 @@ class SQLAlchemyEnrollmentRepository:
             ).order_by(EnrollmentRecord.created_at.desc(), EnrollmentRecord.enrollment_id)).scalars()
             return tuple(record_to_authorization(record) for record in records)
 
+    def renew_expired_authorization(self, enrollment_id, organization_id, now):
+        expires_at = now + ENROLLMENT_RENEWAL_TTL
+        scope = (
+            EnrollmentRecord.enrollment_id == str(enrollment_id),
+            EnrollmentRecord.organization_id == str(OrganizationId.parse(organization_id)),
+        )
+        with self._database_manager.get_db() as session:
+            changed = session.execute(update(EnrollmentRecord).where(
+                *scope,
+                EnrollmentRecord.status.in_((EnrollmentStatus.PENDING.value, EnrollmentStatus.EXPIRED.value)),
+                EnrollmentRecord.expires_at <= _store(now),
+                EnrollmentRecord.created_at >= _store(expires_at - ENROLLMENT_RENEWAL_MAX_AGE),
+                EnrollmentRecord.consumed_at.is_(None),
+                EnrollmentRecord.revoked_at.is_(None),
+            ).values(status=EnrollmentStatus.PENDING.value, expires_at=_store(expires_at)))
+            record = session.execute(select(EnrollmentRecord).where(*scope)).scalar_one_or_none()
+            if record is None:
+                raise KeyError("enrollment authorization not found")
+            if changed.rowcount != 1:
+                raise ValueError("enrollment authorization cannot be renewed")
+            return record_to_authorization(record)
+
     def revoke_authorization_for_organization(self, enrollment_id, organization_id, now):
         owner = str(OrganizationId.parse(organization_id))
         with self._database_manager.get_db() as session:
             changed = session.execute(update(EnrollmentRecord).where(
                 EnrollmentRecord.enrollment_id == str(enrollment_id),
                 EnrollmentRecord.organization_id == owner,
-                EnrollmentRecord.status == EnrollmentStatus.PENDING.value,
+                EnrollmentRecord.status.in_((EnrollmentStatus.PENDING.value, EnrollmentStatus.EXPIRED.value)),
             ).values(status=EnrollmentStatus.REVOKED.value, revoked_at=_store(now)))
             if changed.rowcount == 1:
                 return True
@@ -92,7 +115,7 @@ class SQLAlchemyEnrollmentRepository:
             if record is None:
                 raise KeyError("enrollment authorization not found")
             if record.status != EnrollmentStatus.REVOKED.value:
-                raise ValueError("enrollment authorization is no longer pending")
+                raise ValueError("enrollment authorization is no longer unused")
             return False
 
     def revoke_authorization(self, enrollment_id: EnrollmentId, now) -> None:
@@ -107,9 +130,11 @@ class SQLAlchemyEnrollmentRepository:
 
     def expire_authorization(self, enrollment_id: EnrollmentId, now) -> None:
         with self._database_manager.get_db() as session:
-            record = session.get(EnrollmentRecord, str(enrollment_id))
-            if record is not None and record.status == EnrollmentStatus.PENDING.value:
-                record.status = EnrollmentStatus.EXPIRED.value
+            session.execute(update(EnrollmentRecord).where(
+                EnrollmentRecord.enrollment_id == str(enrollment_id),
+                EnrollmentRecord.status == EnrollmentStatus.PENDING.value,
+                EnrollmentRecord.expires_at <= _store(now),
+            ).values(status=EnrollmentStatus.EXPIRED.value))
 
     def complete_enrollment(self, enrollment_id, presented_token, endpoint, credential, now) -> None:
         with self._database_manager.get_db() as session:
@@ -122,7 +147,7 @@ class SQLAlchemyEnrollmentRepository:
                 raise EnrollmentAlreadyUsedError("enrollment authorization has already been consumed")
             if record.status == EnrollmentStatus.REVOKED.value:
                 raise EnrollmentRevokedError("enrollment authorization has been revoked")
-            if _store(now) >= record.expires_at:
+            if record.status == EnrollmentStatus.EXPIRED.value or _store(now) >= record.expires_at:
                 raise EnrollmentExpiredError("enrollment authorization has expired")
             if not verify_secret(presented_token, record.token_verifier):
                 raise ValueError("invalid enrollment token")

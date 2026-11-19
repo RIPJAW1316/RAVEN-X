@@ -67,6 +67,8 @@ export const enrollment = {
     request<IssuedEnrollmentToken>(`${org(id)}/enrollment-tokens`, {
       method: "POST", body: { label, ttl_minutes: ttlMinutes, max_uses: 1 },
     }),
+  renewToken: (id: string, enrollmentId: string) =>
+    request<EnrollmentToken>(`${org(id)}/enrollment-tokens/${encodeURIComponent(enrollmentId)}/renew`, { method: "POST" }),
   revokeToken: (id: string, enrollmentId: string) =>
     request<EnrollmentToken>(`${org(id)}/enrollment-tokens/${encodeURIComponent(enrollmentId)}`, { method: "DELETE" }),
   approve: (id: string, endpointId: string) =>

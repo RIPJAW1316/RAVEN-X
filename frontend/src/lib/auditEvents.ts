@@ -90,6 +90,7 @@ const TITLES: Record<string, string> = {
   "endpoint.presence_stale": "Endpoint heartbeat stale",
   "endpoint.presence_offline": "Endpoint went offline",
   "enrollment.created": "Enrollment token issued",
+  "enrollment.renewed": "Enrollment token renewed",
   "enrollment.consumed": "Enrollment completed",
   "enrollment.consumption_failed": "Enrollment rejected",
   "enrollment.revoked": "Enrollment revoked",

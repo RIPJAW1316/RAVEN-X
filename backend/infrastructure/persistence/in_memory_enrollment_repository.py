@@ -7,6 +7,7 @@ from ...application.enrollment.service import EnrollmentAlreadyUsedError, Enroll
 from ...application.ports.enrollment_repository import RenewalDecision, RenewalDecisionKind
 from ...domain.endpoint import EndpointStatus
 from ...domain.enrollment import CredentialId, CredentialRenewal, CredentialStatus, EnrollmentStatus
+from ...domain.enrollment.models import ENROLLMENT_RENEWAL_TTL
 from ...infrastructure.security import verify_secret
 
 
@@ -42,6 +43,17 @@ class InMemoryEnrollmentRepository:
                 key=lambda item: (item.created_at, str(item.enrollment_id)), reverse=True,
             ))
 
+    def renew_expired_authorization(self, enrollment_id, organization_id, now):
+        with self._lock:
+            item = self.get_authorization_for_organization(enrollment_id, organization_id)
+            if item is None:
+                raise KeyError("enrollment authorization not found")
+            if not item.can_renew(now):
+                raise ValueError("enrollment authorization cannot be renewed")
+            renewed = replace(item, status=EnrollmentStatus.PENDING, expires_at=now + ENROLLMENT_RENEWAL_TTL)
+            self.authorizations[str(enrollment_id)] = renewed
+            return renewed
+
     def revoke_authorization_for_organization(self, enrollment_id, organization_id, now):
         with self._lock:
             item = self.get_authorization_for_organization(enrollment_id, organization_id)
@@ -49,8 +61,8 @@ class InMemoryEnrollmentRepository:
                 raise KeyError("enrollment authorization not found")
             if item.status is EnrollmentStatus.REVOKED:
                 return False
-            if item.status is not EnrollmentStatus.PENDING:
-                raise ValueError("enrollment authorization is no longer pending")
+            if item.status not in (EnrollmentStatus.PENDING, EnrollmentStatus.EXPIRED):
+                raise ValueError("enrollment authorization is no longer unused")
             self.authorizations[str(enrollment_id)] = replace(item, status=EnrollmentStatus.REVOKED, revoked_at=now)
             return True
 
@@ -68,7 +80,8 @@ class InMemoryEnrollmentRepository:
     def expire_authorization(self, enrollment_id, now):
         with self._lock:
             authorization = self.authorizations.get(str(enrollment_id))
-            if authorization is not None and authorization.status is EnrollmentStatus.PENDING:
+            if (authorization is not None and authorization.status is EnrollmentStatus.PENDING
+                    and authorization.expires_at <= now):
                 self.authorizations[str(enrollment_id)] = replace(authorization, status=EnrollmentStatus.EXPIRED)
 
     def complete_enrollment(self, enrollment_id, presented_token, endpoint, credential, now):
@@ -80,7 +93,7 @@ class InMemoryEnrollmentRepository:
                 raise EnrollmentAlreadyUsedError("enrollment authorization has already been consumed")
             if authorization.status is EnrollmentStatus.REVOKED:
                 raise EnrollmentRevokedError("enrollment authorization has been revoked")
-            if now >= authorization.expires_at:
+            if authorization.status is EnrollmentStatus.EXPIRED or now >= authorization.expires_at:
                 raise EnrollmentExpiredError("enrollment authorization has expired")
             if not verify_secret(presented_token, authorization.token_verifier):
                 raise ValueError("invalid enrollment token")

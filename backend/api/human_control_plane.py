@@ -10,6 +10,7 @@ from enum import Enum
 import hashlib
 import re
 from typing import Any, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -252,6 +253,22 @@ def create_human_control_plane_router(dependencies: HumanControlPlaneDependencie
             raise _http_error(403, "FORBIDDEN", "permission denied")
         response = {**_enrollment_descriptor(authorization), "enrollment_token": secret.value}
         return JSONResponse(response, status_code=201, headers={"Cache-Control": "no-store"})
+
+    @router.post("/organizations/{organization_id}/enrollment-tokens/{enrollment_id}/renew", tags=["Agent Enrollment"])
+    async def renew_enrollment_token(enrollment_id: UUID, context: HumanRequestContext = Depends(organization_context)):
+        if dependencies.enrollment_service is None:
+            raise _http_error(503, "ENROLLMENT_UNAVAILABLE", "enrollment is unavailable")
+        try:
+            item = dependencies.enrollment_service.renew(
+                context.principal, context.organization_context, enrollment_id)
+        except KeyError:
+            raise _http_error(404, "NOT_FOUND", "resource not found")
+        except PermissionError:
+            raise _http_error(403, "FORBIDDEN", "permission denied")
+        except ValueError:
+            raise _http_error(409, "ENROLLMENT_NOT_RENEWABLE",
+                              "Only recently issued, unused and expired tokens can be renewed.")
+        return JSONResponse(_enrollment_descriptor(item), headers={"Cache-Control": "no-store"})
 
     @router.delete("/organizations/{organization_id}/enrollment-tokens/{enrollment_id}", tags=["Agent Enrollment"])
     async def revoke_enrollment_token(enrollment_id: str, context: HumanRequestContext = Depends(organization_context)):
@@ -823,12 +840,14 @@ def _json_safe(value: Any):
 def _enrollment_descriptor(authorization):
     """Public management view; token verifier and raw token never appear here."""
     effective_status = authorization.status
-    if effective_status is EnrollmentStatus.PENDING and datetime.now(timezone.utc) >= authorization.expires_at:
+    now = datetime.now(timezone.utc)
+    if effective_status is EnrollmentStatus.PENDING and now >= authorization.expires_at:
         effective_status = EnrollmentStatus.EXPIRED
     return {
         "enrollment_id": str(authorization.enrollment_id),
         "organization_id": str(authorization.organization_id),
         "status": effective_status.value,
+        "renewable": authorization.can_renew(now),
         "created_at": authorization.created_at.astimezone(timezone.utc).isoformat(),
         "expires_at": authorization.expires_at.astimezone(timezone.utc).isoformat(),
         "label": authorization.metadata.get("label", ""),

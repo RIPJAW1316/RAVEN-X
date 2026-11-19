@@ -61,7 +61,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw ($trustOutput -join ' ') }
     $phase = 'agent installation and enrollment'
     Write-Host '[4/4] Installing and enrolling the agent'
-    $arguments = @{ServerUrl=$config.server_url;EnrollmentId=$enrollmentId;CaCertPath=$config.ca_path;CaCertSha256=$config.ca_sha256;BootstrapToken=$token}
+    $arguments = @{ServerUrl=$config.server_url;EnrollmentId=$enrollmentId;CaCertPath=$config.ca_path;CaCertSha256=$config.ca_sha256;BootstrapToken=$token;AllowEnrollmentRetry=$true}
     & (Join-Path $PSScriptRoot 'install-agent.ps1') @arguments
     'Installed and enrolled. Approve this computer in Omen Enrollment, then check Fleet for Online.' | Set-Content -LiteralPath (Join-Path $session 'result.txt') -Encoding UTF8
     exit 0

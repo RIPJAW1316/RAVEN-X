@@ -204,6 +204,7 @@ class SecurityAuditEventType(str, Enum):
     ENDPOINT_PRESENCE_STALE = "endpoint.presence_stale"
     ENDPOINT_PRESENCE_OFFLINE = "endpoint.presence_offline"
     ENROLLMENT_CREATED = "enrollment.created"
+    ENROLLMENT_RENEWED = "enrollment.renewed"
     ENROLLMENT_CONSUMED = "enrollment.consumed"
     ENROLLMENT_CONSUMPTION_FAILED = "enrollment.consumption_failed"
     ENROLLMENT_REVOKED = "enrollment.revoked"

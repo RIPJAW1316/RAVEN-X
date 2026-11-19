@@ -14,9 +14,9 @@ function Assert-ReleaseManifestFiles {
         throw 'Release manifest is unsafe.'
     }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-    if ($manifest.format -ne 1 -or $manifest.version -ne '1.0.0-rc9' -or
+    if ($manifest.format -ne 1 -or $manifest.version -ne '1.0.0-rc10' -or
         $manifest.source_baseline -ne 'b53ac0fea11432badcc13e89d0d0f3966d1689bd' -or
-        $manifest.accepted_diff_sha256 -ne '96e4cbd61c1154ea37a558fabb213075cd0378fb8232582acbfc02d5ee8e5d3a') {
+        $manifest.accepted_diff_sha256 -ne '97a03d490a87183a2d0f89f247250bd4349e1f3f68b1e2476f8788e55d422f0f') {
         throw 'Release manifest identity is unexpected.'
     }
     $expected = @{}

@@ -1,5 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import secrets
+from threading import Barrier
 
 import pytest
 from sqlalchemy import select
@@ -29,6 +31,46 @@ def _manager(tmp_path):
     manager.initialize_sync_engine()
     manager.create_tables()
     return manager
+
+
+def test_expired_authorization_renews_in_place_once_under_concurrency(tmp_path):
+    manager = _manager(tmp_path)
+    repository = SQLAlchemyEnrollmentRepository(manager)
+    organization = Organization(OrganizationId.new(), "Renewal test", created_at=NOW, updated_at=NOW)
+    SQLAlchemyOrganizationRepository(manager).add(organization)
+    service = EnrollmentService(repository)
+    invitation, secret = service.create_enrollment_authorization(
+        now=NOW, ttl=timedelta(minutes=1), organization_id=organization.organization_id,
+    )
+    expired_at = NOW + timedelta(minutes=1)
+    repository.expire_authorization(invitation.enrollment_id, expired_at)
+    barrier = Barrier(2)
+
+    def renew():
+        barrier.wait(timeout=5)
+        try:
+            return repository.renew_expired_authorization(
+                invitation.enrollment_id, organization.organization_id, expired_at,
+            )
+        except ValueError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(renew)
+        second = pool.submit(renew)
+        renewed, = [item for item in (first.result(), second.result()) if item is not None]
+
+    assert renewed.enrollment_id == invitation.enrollment_id
+    assert renewed.created_at == invitation.created_at
+    assert renewed.token_verifier == invitation.token_verifier
+    assert renewed.expires_at == expired_at + timedelta(minutes=30)
+    repository.expire_authorization(invitation.enrollment_id, expired_at)
+    assert repository.get_authorization(invitation.enrollment_id).status is EnrollmentStatus.PENDING
+    service.accept_enrollment(invitation.enrollment_id, secret.value,
+                              EnrollmentRequest("renewed-sql-host", PlatformInfo("Windows")), now=expired_at)
+    with pytest.raises(ValueError, match="cannot be renewed"):
+        repository.renew_expired_authorization(invitation.enrollment_id, organization.organization_id,
+                                              expired_at + timedelta(hours=1))
 
 
 def test_enrollment_and_credential_survive_reload_and_endpoint_revoke(tmp_path):

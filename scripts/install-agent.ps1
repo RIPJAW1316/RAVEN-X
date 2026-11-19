@@ -20,6 +20,7 @@ param(
     [Parameter(Mandatory = $true)][string]$CaCertPath,
     [Parameter(Mandatory = $true)][string]$CaCertSha256,
     [switch]$NoStart,
+    [switch]$AllowEnrollmentRetry,
     [Security.SecureString]$BootstrapToken
 )
 
@@ -213,21 +214,34 @@ try {
         '--enrollment-id', $EnrollmentId.ToString(), '--ca-cert', $caTarget, '--data-dir', $dataRoot)
     if ($null -eq $BootstrapToken) {
         & $agentPython @enrollArgs --interactive-retry
+        if ($LASTEXITCODE -ne 0) { throw 'Agent enrollment failed.' }
     } else {
-        $secret = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($BootstrapToken)
-        try {
-            $ErrorActionPreference = 'Continue'
-            $enrollOutput = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secret) |
-                & $agentPython @enrollArgs --token-stdin 2>&1
-        } finally {
-            $ErrorActionPreference = 'Stop'
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secret)
-        }
-        if ($LASTEXITCODE -ne 0 -and ($enrollOutput -join ' ') -match '\benrollment_rejected\b') {
-            throw 'Omen rejected enrollment. Run Recovery, then retry with a fresh matching enrollment ID and token.'
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $secret = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($BootstrapToken)
+            try {
+                $ErrorActionPreference = 'Continue'
+                $enrollOutput = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secret) |
+                    & $agentPython @enrollArgs --token-stdin 2>&1
+                $enrollExit = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = 'Stop'
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secret)
+            }
+            if ($enrollExit -eq 0) { break }
+            if (($enrollOutput -join ' ') -notmatch '\benrollment_rejected\b') {
+                throw 'Agent enrollment failed.'
+            }
+            $message = 'Omen rejected enrollment. Check the enrollment ID in the Omen portal. If the saved token is wrong, revoked, or used, run Client Removal in Recovery mode and retry with matching credentials.'
+            if (-not $AllowEnrollmentRetry -or $attempt -eq 3) { throw $message }
+            Add-Type -AssemblyName System.Windows.Forms
+            $choice = [Windows.Forms.MessageBox]::Show(
+                "If the unused token expired, open Omen > Enrollment and select Renew token for this ID: $EnrollmentId. Click Retry after renewal to continue with the same saved token.",
+                'RAVEN-X Setup', [Windows.Forms.MessageBoxButtons]::RetryCancel,
+                [Windows.Forms.MessageBoxIcon]::Warning, [Windows.Forms.MessageBoxDefaultButton]::Button2,
+                [Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly)
+            if ($choice -ne [Windows.Forms.DialogResult]::Retry) { throw $message }
         }
     }
-    if ($LASTEXITCODE -ne 0) { throw 'Agent enrollment failed.' }
 
     $arguments = '-E -s -m backend.agent run --server "{0}" --ca-cert "{1}" --data-dir "{2}"' -f $ServerUrl, $caTarget, $dataRoot
     $action = New-ScheduledTaskAction -Execute $agentPython -Argument $arguments -WorkingDirectory $installRoot
@@ -239,18 +253,23 @@ try {
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
         -Description 'RAVEN-X outbound Windows endpoint agent' | Out-Null
-    $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    Enable-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop | Out-Null
+    $registered = Get-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop
     if ($registered.Principal.UserId -notin @('SYSTEM', 'S-1-5-18') -or
         $registered.Principal.RunLevel -ne 'Highest' -or
         @($registered.Actions).Count -ne 1 -or
         $registered.Actions[0].Execute -ine $agentPython -or
         $registered.Actions[0].WorkingDirectory -ine $installRoot -or
         $registered.Actions[0].Arguments -cne $arguments -or
+        -not $registered.Settings.Enabled -or
+        @($registered.Triggers).Count -ne 1 -or
+        $registered.Triggers[0].CimClass.CimClassName -ne 'MSFT_TaskBootTrigger' -or
+        -not $registered.Triggers[0].Enabled -or
         $registered.Settings.DisallowStartIfOnBatteries -or
         $registered.Settings.StopIfGoingOnBatteries) {
         throw 'Registered agent task differs from the expected SYSTEM configuration.'
     }
-    if (-not $NoStart) { Start-ScheduledTask -TaskName $taskName }
+    if (-not $NoStart) { Start-ScheduledTask -TaskName $taskName -TaskPath '\' }
 } finally {
     Pop-Location
 }

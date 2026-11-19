@@ -36,6 +36,22 @@ class TenantEnrollmentService:
         self._require(principal, context, AuthorizationAction.ENROLLMENT_CREATE)
         return self.repository.list_authorizations_for_organization(context.organization_id)
 
+    def renew(self, principal, context, enrollment_id):
+        self._require(principal, context, AuthorizationAction.ENROLLMENT_CREATE)
+        enrollment_id = EnrollmentId.parse(str(enrollment_id))
+        renewed = self.repository.renew_expired_authorization(
+            enrollment_id, context.organization_id, datetime.now(timezone.utc),
+        )
+        if self.audit_sink is not None:
+            self.audit_sink.append(SecurityAuditEvent(
+                event_type=SecurityAuditEventType.ENROLLMENT_RENEWED.value,
+                principal=principal, outcome=SecurityAuditOutcome.SUCCESS,
+                user_id=principal.principal_id, organization_id=str(context.organization_id),
+                membership_id=context.membership_id,
+                metadata={"enrollment_id": str(enrollment_id), "expires_at": renewed.expires_at.isoformat()},
+            ))
+        return renewed
+
     def revoke(self, principal, context, enrollment_id):
         self._require(principal, context, AuthorizationAction.ENROLLMENT_REVOKE)
         enrollment_id = EnrollmentId.parse(str(enrollment_id))

@@ -21,9 +21,9 @@ def _stage(tmp_path):
     code = stage / "backend" / "agent" / "host.py"
     code.write_bytes(b"reviewed agent code\n")
     manifest = {
-        "format": 1, "version": "1.0.0-rc9",
+        "format": 1, "version": "1.0.0-rc10",
         "source_baseline": "b53ac0fea11432badcc13e89d0d0f3966d1689bd",
-        "accepted_diff_sha256": "96e4cbd61c1154ea37a558fabb213075cd0378fb8232582acbfc02d5ee8e5d3a",
+        "accepted_diff_sha256": "97a03d490a87183a2d0f89f247250bd4349e1f3f68b1e2476f8788e55d422f0f",
         "files": [{"path": "backend/agent/host.py", "sha256": hashlib.sha256(code.read_bytes()).hexdigest(),
                    "size": code.stat().st_size}],
     }

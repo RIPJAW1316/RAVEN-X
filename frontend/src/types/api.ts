@@ -46,6 +46,7 @@ export interface EnrollmentToken {
   organization_id: string;
   label: string;
   status: "pending" | "consumed" | "expired" | "revoked";
+  renewable?: boolean;
   created_at: string;
   expires_at: string;
   consumed_at?: string | null;

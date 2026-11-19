@@ -1,7 +1,7 @@
 """Infrastructure-independent enrollment domain values."""
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional
 from uuid import UUID, uuid4
@@ -55,6 +55,10 @@ class EnrollmentStatus(str, Enum):
     CONSUMED = "consumed"
     EXPIRED = "expired"
     REVOKED = "revoked"
+
+
+ENROLLMENT_RENEWAL_TTL = timedelta(minutes=30)
+ENROLLMENT_RENEWAL_MAX_AGE = timedelta(hours=48)
 
 
 class CredentialStatus(str, Enum):
@@ -115,6 +119,14 @@ class EnrollmentAuthorization:
     revoked_at: Optional[datetime] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     organization_id: Optional[OrganizationId] = None
+
+    def can_renew(self, now: datetime) -> bool:
+        return (
+            self.status in (EnrollmentStatus.PENDING, EnrollmentStatus.EXPIRED)
+            and self.consumed_at is None and self.revoked_at is None
+            and self.expires_at <= now
+            and now + ENROLLMENT_RENEWAL_TTL <= self.created_at + ENROLLMENT_RENEWAL_MAX_AGE
+        )
 
     def __post_init__(self) -> None:
         if not self.token_verifier:

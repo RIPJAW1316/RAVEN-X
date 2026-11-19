@@ -218,7 +218,7 @@ class EnrollmentService:
             raise EnrollmentAlreadyUsedError("enrollment authorization has already been consumed")
         if authorization.status is EnrollmentStatus.REVOKED:
             raise EnrollmentRevokedError("enrollment authorization has been revoked")
-        if now >= authorization.expires_at:
+        if authorization.status is EnrollmentStatus.EXPIRED or now >= authorization.expires_at:
             self._repository.expire_authorization(enrollment_id, now)
             raise EnrollmentExpiredError("enrollment authorization has expired")
         if not verify_secret(presented_token, authorization.token_verifier):

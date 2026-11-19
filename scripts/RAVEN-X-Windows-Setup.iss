@@ -1,6 +1,6 @@
-#define ReleaseVersion "1.0.0-rc9"
+#define ReleaseVersion "1.0.0-rc10"
 #ifndef StageRoot
-  #define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc9"
+  #define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc10"
 #endif
 #define MainScriptHash GetSHA256OfFile(StageRoot + "\scripts\install-agent.ps1")
 #define WrapperScriptHash GetSHA256OfFile(StageRoot + "\scripts\setup-agent.ps1")
@@ -20,7 +20,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=RAVEN-X-Windows-Setup-rc9
+OutputBaseFilename=RAVEN-X-Windows-Setup-rc10
 Compression=lzma2
 SolidCompression=yes
 Uninstallable=no
@@ -90,7 +90,7 @@ begin
     'Enter public connection details',
     'Get the CA SHA-256 fingerprint independently from the Omen administrator. Do not copy a fingerprint shipped with this Setup.exe.');
   TrustPage.Add('Omen HTTPS URL (for example https://192.168.1.121:8443):', False);
-  TrustPage.Add('Fresh enrollment ID (UUID):', False);
+  TrustPage.Add('Enrollment ID (UUID):', False);
   TrustPage.Add('Independently verified public CA SHA-256:', False);
   CaPage := CreateInputFilePage(TrustPage.ID, 'Omen public CA',
     'Select the Omen public CA PEM',

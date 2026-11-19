@@ -267,6 +267,35 @@ test("AI Analyst requests the fix plan and labels offline results", async ({ pag
   await expect(page.getByRole("heading", { name: "Prioritized Fix Plan" })).toBeVisible();
 });
 
+test("Enrollment renews eligible expired tokens and keeps their ID", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  const enrollmentId = "11111111-2222-4333-8444-555555555555";
+  const issued = {
+    enrollment_id: enrollmentId, label: "Test workstation", organization_id: organizationId,
+    created_at: timestamp, expires_at: timestamp, status: "expired", renewable: true,
+  };
+  const pending = { ...issued, expires_at: "2026-10-10T10:30:00Z", status: "pending", renewable: false };
+  let list = [issued];
+  await page.route("**/fleet/endpoints?**", route => route.fulfill({ json: { items: [] } }));
+  await page.route("**/enrollment-tokens", route => route.fulfill({ json: list }));
+  await page.route(`**/enrollment-tokens/${enrollmentId}/renew`, async route => {
+    list = [pending];
+    await route.fulfill({ json: pending });
+  });
+
+  await new AssessmentOutcomePortal(page).signIn();
+  await page.getByRole("link", { name: "Enrollment", exact: true }).click();
+  await page.getByRole("button", { name: "Renew token", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Renew expired enrollment token" });
+  const request = page.waitForRequest(req =>
+    req.method() === "POST" && req.url().endsWith(`/enrollment-tokens/${enrollmentId}/renew`));
+  await dialog.getByRole("button", { name: "Renew for 30 minutes" }).click();
+  expect((await request).postData()).toBeNull();
+  await expect(page.getByRole("row", { name: /Test workstation/ })).toContainText("pending");
+  await expect(page.getByRole("status").filter({ hasText: "Use the same enrollment ID and saved token." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Renew token", exact: true })).toHaveCount(0);
+});
+
 test("posture with unknown evidence and a paginated printable machine report", async ({ page }, testInfo) => {
   test.skip(!fixtureResponses, "Presentation fixture");
   await new AssessmentOutcomePortal(page).signIn();

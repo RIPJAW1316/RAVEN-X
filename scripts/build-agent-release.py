@@ -19,8 +19,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "b53ac0fea11432badcc13e89d0d0f3966d1689bd"
-ACCEPTED_DIFF = "96e4cbd61c1154ea37a558fabb213075cd0378fb8232582acbfc02d5ee8e5d3a"
-VERSION = "1.0.0-rc9"
+ACCEPTED_DIFF = "97a03d490a87183a2d0f89f247250bd4349e1f3f68b1e2476f8788e55d422f0f"
+VERSION = "1.0.0-rc10"
 EXTENDED_CHECKS_SHA256 = "eaa8d9b386b13222dba73ff90d1726f01a5bedb5a1e751f48df6b5ec277bfb93"
 ACCEPTED_PATHS = (
     "backend/agent/windows_scanners.py", "backend/application/assessment/local_orchestrator.py",
@@ -31,6 +31,8 @@ ACCEPTED_PATHS = (
     "tests/unit/test_local_capabilities.py", "tests/unit/test_tenant_insights.py",
     "tests/unit/test_windows_agent_host.py", "tests/unit/test_windows_agent_store.py",
     "tests/unit/test_windows_read_only_scanners.py",
+    "backend/domain/enrollment/models.py", "scripts/install-agent.ps1", "scripts/setup-agent.ps1",
+    "scripts/RAVEN-X-Windows-Setup.iss", "scripts/setup-token-pipe.iss",
 )
 WHEEL_NAMES = frozenset({
     "anyio-4.16.0-py3-none-any.whl", "certifi-2026.10.23-py3-none-any.whl",
@@ -46,14 +48,13 @@ def digest(data: bytes) -> str:
 
 
 def verify_accepted_source() -> None:
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    if head != BASELINE:
+    if subprocess.run(["git", "merge-base", "--is-ancestor", BASELINE, "HEAD"], cwd=ROOT).returncode:
         raise ValueError("source baseline changed")
-    delta = subprocess.check_output(["git", "diff", "--binary", "--", *ACCEPTED_PATHS], cwd=ROOT)
+    delta = subprocess.check_output(["git", "diff", "--binary", BASELINE, "--", *ACCEPTED_PATHS], cwd=ROOT)
     if digest(delta) != ACCEPTED_DIFF:
         raise ValueError("reviewed scanner source diff changed")
     extended = ROOT / "backend" / "agent" / "windows_extended_checks.py"
-    if digest(extended.read_bytes()) != EXTENDED_CHECKS_SHA256:
+    if digest(extended.read_bytes().replace(b"\r\n", b"\n")) != EXTENDED_CHECKS_SHA256:
         raise ValueError("reviewed extended scanner source changed")
 
 

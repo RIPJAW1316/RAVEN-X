@@ -19,8 +19,11 @@ export function Enrollment({ organizationId, navigate }: {
   const [ttl, setTtl] = useState(60);
   const [issued, setIssued] = useState<IssuedEnrollmentToken | null>(null);
   const [revoking, setRevoking] = useState<EnrollmentToken | null>(null);
+  const [renewing, setRenewing] = useState<EnrollmentToken | null>(null);
+  const [renewed, setRenewed] = useState<EnrollmentToken | null>(null);
   const issue = useMutation((name: string, minutes: number) => enrollment.issue(organizationId, name, minutes));
   const revoke = useMutation((id: string) => enrollment.revokeToken(organizationId, id));
+  const renew = useMutation((id: string) => enrollment.renewToken(organizationId, id));
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -36,6 +39,15 @@ export function Enrollment({ organizationId, navigate }: {
     if (!revoking) return;
     if (await revoke.run(revoking.enrollment_id)) {
       setRevoking(null);
+      tokens.reload();
+    }
+  };
+  const renewSelected = async () => {
+    if (!renewing) return;
+    const result = await renew.run(renewing.enrollment_id);
+    if (result) {
+      setRenewed(result);
+      setRenewing(null);
       tokens.reload();
     }
   };
@@ -65,6 +77,9 @@ export function Enrollment({ organizationId, navigate }: {
 
     <Panel title="Single-use enrollment tokens" icon={<KeyRound size={15} />}>
       {revoke.error && <ErrorState error={revoke.error} />}
+      {renewed && <p className="panel-note" role="status">
+        Token {shortId(renewed.enrollment_id)} renewed until {formatDateTime(renewed.expires_at)}. Use the same enrollment ID and saved token.
+      </p>}
       <AsyncSection loading={tokens.loading} error={tokens.error} data={tokens.data} onRetry={tokens.reload}
         empty={<Empty title="No enrollment tokens" detail="Issue a token for the Dell or HP notebook. The secret is displayed once and expires automatically." />}>
         {(items) => <div className="table-scroll"><table className="data-table"><thead><tr><th>Label / ID</th><th>Status</th><th>Expires</th><th>Action</th></tr></thead>
@@ -72,7 +87,12 @@ export function Enrollment({ organizationId, navigate }: {
             <td>{token.label || "Windows endpoint"}<small className="block mono">{shortId(token.enrollment_id)}</small></td>
             <td><Badge tone={token.status === "pending" ? "warn" : "neutral"}>{token.status}</Badge></td>
             <td>{formatDateTime(token.expires_at)}</td>
-            <td>{token.status === "pending" && <button type="button" className="ghost small" onClick={() => { revoke.reset(); setRevoking(token); }}>Revoke token</button>}</td>
+            <td><span className="row-actions">
+              {token.renewable && <button type="button" className="ghost small"
+                onClick={() => { renew.reset(); setRenewed(null); setRenewing(token); }}>Renew token</button>}
+              {(token.status === "pending" || token.status === "expired") && <button type="button" className="ghost small"
+                onClick={() => { revoke.reset(); setRevoking(token); }}>Revoke token</button>}
+            </span></td>
           </tr>)}</tbody></table></div>}
       </AsyncSection>
       <p className="panel-note">Tokens grant registration in this organization. They do not approve an endpoint. Revoking a token does not revoke a machine that already redeemed it.</p>
@@ -96,6 +116,14 @@ export function Enrollment({ organizationId, navigate }: {
       </div>}
     </Modal>
     <Confirm open={revoking !== null} title="Revoke this token?" message="This prevents further registration with the unused token. Already enrolled machines are unaffected." confirmLabel="Revoke token" destructive busy={revoke.busy} onConfirm={revokeSelected} onCancel={() => { if (!revoke.busy) setRevoking(null); }} />
+    <Modal open={renewing !== null} title="Renew expired enrollment token" onClose={() => { if (!renew.busy) setRenewing(null); }}>
+      <p>The saved token and enrollment ID will work again for 30 minutes. Renew only if the token is still private. If it may have been shared, revoke it and issue a new one.</p>
+      {renew.error && <ErrorState error={renew.error} />}
+      <div className="modal-actions">
+        <button type="button" className="ghost" disabled={renew.busy} onClick={() => setRenewing(null)}>Cancel</button>
+        <button type="button" className="primary" disabled={renew.busy} onClick={renewSelected}>{renew.busy ? "Renewing…" : "Renew for 30 minutes"}</button>
+      </div>
+    </Modal>
   </>;
 }
 

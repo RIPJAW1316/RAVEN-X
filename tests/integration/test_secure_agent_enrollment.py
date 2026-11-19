@@ -194,7 +194,7 @@ def test_human_enrollment_routes_scope_tokens_and_approval_to_verified_tenant():
     assert issued["organization_id"] == str(organization.organization_id)
     assert issued["label"] == "Desk A"
     assert issued["status"] == "pending"
-    expired_auth, _ = EnrollmentService(repository).create_enrollment_authorization(
+    expired_auth, saved_secret = EnrollmentService(repository).create_enrollment_authorization(
         organization_id=organization.organization_id,
         now=datetime.now(timezone.utc) - timedelta(minutes=2),
         ttl=timedelta(minutes=1),
@@ -221,6 +221,40 @@ def test_human_enrollment_routes_scope_tokens_and_approval_to_verified_tenant():
     assert created_events[0].user_id == str(owner.user_id)
     assert created_events[0].organization_id == str(organization.organization_id)
     assert created_events[0].membership_id == str(owner_membership.membership_id)
+
+    assert listed.json()[1]["renewable"] is True
+    assert listed.json()[0]["renewable"] is False
+    renewal = f"{tokens}/{expired_auth.enrollment_id}/renew"
+    assert client.post(renewal, headers=viewer_headers).status_code == 403
+    assert client.post(renewal).status_code == 401
+    assert client.post(f"{tokens}/{other_auth.enrollment_id}/renew", headers=headers).status_code == 404
+    assert client.post(f"{tokens}/{issued['enrollment_id']}/renew", headers=headers).status_code == 409
+    renewed = client.post(renewal, headers=headers)
+    assert renewed.status_code == 200
+    assert renewed.headers["cache-control"] == "no-store"
+    assert renewed.json()["enrollment_id"] == str(expired_auth.enrollment_id)
+    assert renewed.json()["status"] == "pending"
+    assert renewed.json()["renewable"] is False
+    assert saved_secret.value not in renewed.text
+    assert "token_verifier" not in renewed.json()
+    assert "enrollment_token" not in renewed.json()
+    assert client.post(renewal, headers=headers).status_code == 409
+    event, = audit.list(event_type="enrollment.renewed")
+    assert event.user_id == str(owner.user_id)
+    assert event.metadata["expires_at"] == renewed.json()["expires_at"]
+    endpoint, _, _ = EnrollmentService(repository).accept_enrollment(
+        expired_auth.enrollment_id, saved_secret.value, EnrollmentRequest("renewed-win-agent", PlatformInfo("Windows")),
+    )
+    assert endpoint.organization_id == organization.organization_id
+    assert client.post(renewal, headers=headers).status_code == 409
+    stale, _ = EnrollmentService(repository).create_enrollment_authorization(
+        organization_id=organization.organization_id,
+        now=datetime.now(timezone.utc) - timedelta(days=3),
+        ttl=timedelta(minutes=1),
+    )
+    assert client.post(f"{tokens}/{stale.enrollment_id}/renew", headers=headers).status_code == 409
+    assert client.delete(f"{tokens}/{stale.enrollment_id}", headers=headers).json()["status"] == "revoked"
+    assert client.post(f"{tokens}/{stale.enrollment_id}/renew", headers=headers).status_code == 409
 
 
 def test_concurrent_sql_redemption_issues_exactly_one_endpoint(tmp_path):
