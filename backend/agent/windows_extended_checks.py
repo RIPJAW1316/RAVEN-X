@@ -265,6 +265,183 @@ else {
 }
 
 
+def _boolean_setting(command, property_name, expected, rule_id):
+    state = "$true" if expected else "$false"
+    return f"""if(-not (Get-Command {command} -ErrorAction SilentlyContinue)){{$unsupported=$true}}
+else {{
+  $value=({command} -ErrorAction Stop).{property_name}
+  if($value -isnot [bool]){{throw 'setting unavailable'}}
+  if($value -ne {state}){{$issues.Add('{rule_id}')}}
+}}"""
+
+
+def _machine_policy(path, property_name, expected, rule_id, *, flag_missing):
+    return rf"""$key=$null
+try {{ $key=Get-Item -LiteralPath 'HKLM:\{path}' -ErrorAction Stop }}
+catch [System.Management.Automation.ItemNotFoundException] {{}}
+$value=$null
+if($null -ne $key){{$value=$key.GetValue('{property_name}',$null)}}
+if($null -eq $value){{{"$issues.Add('" + rule_id + "')" if flag_missing else ""}}}
+elseif(($key.GetValueKind('{property_name}')) -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+       $value -notin @(0,1)){{throw 'invalid machine policy'}}
+elseif($value -ne {expected}){{$issues.Add('{rule_id}')}}"""
+
+
+_DEFENDER_STATUS = """if(-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue)){$unsupported=$true}
+else {
+  $s=Get-MpComputerStatus -ErrorAction Stop
+  if($null -eq $s -or [string]::IsNullOrEmpty($s.AMRunningMode)){throw 'Defender status unavailable'}
+  if($s.AMRunningMode -ne 'Normal'){$unsupported=$true}
+  else {
+"""
+
+
+CHECKS.update({
+    "windows.hotfix-recency": _check(
+        "Windows Hotfix Recency", "Checks the newest dated entry in Windows hotfix inventory.",
+        "Windows Update",
+        """$dates=[Collections.Generic.List[DateTime]]::new()
+foreach($entry in @(Get-HotFix -ErrorAction Stop)){
+  if($entry.InstalledOn -is [DateTime] -and $entry.InstalledOn -gt [DateTime]::MinValue){
+    $dates.Add($entry.InstalledOn)
+  } else {$partial=$true}
+}
+if($dates.Count -eq 0){throw 'no dated hotfix records'}
+$newest=($dates | Sort-Object -Descending | Select-Object -First 1)
+$now=Get-Date
+if($newest -gt $now){throw 'hotfix date is in the future'}
+if(-not $partial -and ($now-$newest).TotalDays -gt 60){$issues.Add('updates.hotfix_inventory_old')}""",
+        **{"updates.hotfix_inventory_old": Rule(
+            "Newest Recorded Hotfix Older Than 60 Days", FindingSeverity.LOW,
+            "The newest dated entry in Windows hotfix inventory is more than 60 days old.")},
+    ),
+    "windows.smb-client-signing": _check(
+        "SMB Client Signing", "Reads whether the Windows SMB client requires signing.", "Network",
+        _boolean_setting("Get-SmbClientConfiguration", "RequireSecuritySignature", True, "smb.client_signing_not_required"),
+        **{"smb.client_signing_not_required": Rule("SMB Client Signing Not Required", FindingSeverity.MEDIUM,
+                       "The SMB client reports that outbound connections do not require signing.")},
+    ),
+    "windows.smb-server-signing": _check(
+        "SMB Server Signing", "Reads whether the Windows SMB server requires signing.", "Network",
+        _boolean_setting("Get-SmbServerConfiguration", "RequireSecuritySignature", True, "smb.server_signing_not_required"),
+        **{"smb.server_signing_not_required": Rule("SMB Server Signing Not Required", FindingSeverity.MEDIUM,
+                       "The SMB server reports that inbound connections do not require signing.")},
+    ),
+    "windows.smb-guest-logons": _check(
+        "SMB Guest Logons", "Reads whether the SMB client allows insecure guest connections.", "Network",
+        _boolean_setting("Get-SmbClientConfiguration", "EnableInsecureGuestLogons", False, "smb.insecure_guest_allowed"),
+        **{"smb.insecure_guest_allowed": Rule("Insecure SMB Guest Logons Allowed", FindingSeverity.HIGH,
+                       "The SMB client allows insecure guest logons by configuration.")},
+    ),
+    "windows.defender-signature-age": _check(
+        "Defender Signature Age", "Reads the antivirus signature age for active Defender.", "Antivirus",
+        _DEFENDER_STATUS + """    $age=$s.AntivirusSignatureAge
+    if(($null -eq $age) -or ($null -eq ($age -as [long])) -or ($age -lt 0) -or ($age -ge 65535)){throw 'signature age unavailable'}
+    if($age -gt 7){$issues.Add('defender.signatures_stale')}
+  }
+}""",
+        **{"defender.signatures_stale": Rule("Defender Signatures Older Than Seven Days", FindingSeverity.HIGH,
+                       "Active Defender reports that antivirus signatures are more than seven days old.")},
+    ),
+    "windows.defender-pua": _check(
+        "Defender PUA Protection", "Reads Defender potentially unwanted application policy.", "Antivirus",
+        _DEFENDER_STATUS + """    $pref=Get-MpPreference -ErrorAction Stop
+    if($null -eq $pref.PUAProtection -or $pref.PUAProtection -notin @(0,1,2)){throw 'PUA policy unavailable'}
+    if($pref.PUAProtection -ne 1){$issues.Add('defender.pua_not_blocking')}
+  }
+}""",
+        **{"defender.pua_not_blocking": Rule("Defender PUA Blocking Not Active", FindingSeverity.MEDIUM,
+                       "Active Defender reports PUA protection disabled or in audit mode.")},
+    ),
+    "windows.defender-exclusion-scope": _check(
+        "Defender User-Path Exclusions", "Recognizes Downloads and temporary path exclusions without reporting the paths.", "Antivirus",
+        _DEFENDER_STATUS + r"""    $pref=Get-MpPreference -ErrorAction Stop
+    if($null -eq $pref -or $null -eq $pref.PSObject.Properties['ExclusionPath']){throw 'exclusion list unavailable'}
+    foreach($value in @($pref.ExclusionPath)){
+      if($null -eq $value){continue}
+      if($value -isnot [string]){$partial=$true;continue}
+      if($value -match '(?i)(?:\\Users\\[^\\]+\\(?:Downloads|AppData\\Local\\Temp)(?:\\|$)|^%(?:TEMP|TMP)%(?:\\|$)|^%USERPROFILE%\\Downloads(?:\\|$))'){
+        $issues.Add('defender.user_path_excluded');break
+      }
+    }
+  }
+}""",
+        **{"defender.user_path_excluded": Rule("Defender Exclusion Covers Downloads or Temp", FindingSeverity.HIGH,
+                       "A configured exclusion matches a profile Downloads or temporary path pattern.")},
+    ),
+    "windows.pending-reboot": _check(
+        "Pending Servicing Reboot", "Reads Windows Update and component-servicing reboot markers.", "Windows Update",
+        r"""$pending=$false
+foreach($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')){
+  try { $null=Get-Item -LiteralPath $key -ErrorAction Stop; $pending=$true }
+  catch [System.Management.Automation.ItemNotFoundException] {}
+  catch {$partial=$true}
+}
+if($pending){$issues.Add('updates.reboot_pending')}""",
+        **{"updates.reboot_pending": Rule("Windows Servicing Reboot Pending", FindingSeverity.LOW,
+                       "Windows Update or component servicing indicates that a reboot is pending.")},
+    ),
+    "windows.powershell-script-block-logging": _check(
+        "PowerShell Script Block Policy", "Reads the Windows PowerShell machine script-block logging policy.", "Auditing",
+        _machine_policy(r"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging", "EnableScriptBlockLogging", 1, "powershell.script_block_not_enforced", flag_missing=True),
+        **{"powershell.script_block_not_enforced": Rule("PowerShell Script Block Logging Policy Not Enabled", FindingSeverity.MEDIUM,
+                       "Machine policy does not explicitly enable Windows PowerShell script block logging.")},
+    ),
+    "windows.powershell-module-logging": _check(
+        "PowerShell Module Logging Policy", "Reads the Windows PowerShell machine module logging policy.", "Auditing",
+        _machine_policy(r"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging", "EnableModuleLogging", 1, "powershell.module_logging_not_enforced", flag_missing=True),
+        **{"powershell.module_logging_not_enforced": Rule("PowerShell Module Logging Policy Not Enabled", FindingSeverity.LOW,
+                       "Machine policy does not explicitly enable Windows PowerShell module logging.")},
+    ),
+    "windows.llmnr-policy": _check(
+        "LLMNR Machine Policy", "Checks whether DNS Client machine policy disables multicast name resolution.", "Network",
+        _machine_policy(r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", 0, "dns.llmnr_not_disabled", flag_missing=True),
+        **{"dns.llmnr_not_disabled": Rule("LLMNR Not Disabled by Machine Policy", FindingSeverity.MEDIUM,
+                       "DNS Client machine policy does not explicitly turn off multicast name resolution.")},
+    ),
+    "windows.wdigest-policy": _check(
+        "WDigest Credential Policy", "Detects an explicit WDigest credential-caching override.", "Authentication",
+        _machine_policy(r"SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0, "auth.wdigest_credential_caching", flag_missing=False),
+        **{"auth.wdigest_credential_caching": Rule("WDigest Credential Caching Explicitly Enabled", FindingSeverity.HIGH,
+                       "The WDigest UseLogonCredential setting is explicitly enabled.")},
+    ),
+    "windows.security-event-log": _check(
+        "Windows Security Event Log", "Checks whether Windows reports the Security event log enabled.", "Auditing",
+        """$log=Get-WinEvent -ListLog 'Security' -ErrorAction Stop
+if($log.IsEnabled -isnot [bool]){throw 'Security log state unavailable'}
+if(-not $log.IsEnabled){$issues.Add('audit.security_log_disabled')}""",
+        **{"audit.security_log_disabled": Rule("Windows Security Event Log Disabled", FindingSeverity.MEDIUM,
+                       "Windows reports the Security event log disabled.")},
+    ),
+    "windows.secure-boot": _check(
+        "Secure Boot", "Reads UEFI Secure Boot state when the firmware exposes it.", "Platform",
+        """if(-not (Get-Command Confirm-SecureBootUEFI -ErrorAction SilentlyContinue)){$unsupported=$true}
+else {
+  try { $enabled=Confirm-SecureBootUEFI -ErrorAction Stop }
+  catch [System.PlatformNotSupportedException] {$enabled=$null;$unsupported=$true}
+  if(-not $unsupported){
+    if($enabled -isnot [bool]){throw 'Secure Boot state unavailable'}
+    if(-not $enabled){$issues.Add('platform.secure_boot_off')}
+  }
+}""",
+        **{"platform.secure_boot_off": Rule("Secure Boot Disabled", FindingSeverity.HIGH,
+                       "The firmware query reports Secure Boot disabled.")},
+    ),
+    "windows.remote-support-service": _check(
+        "Remote Support Service Review", "Checks for a running, automatically started TeamViewer service.", "Remote Access",
+        """$services=@(Get-CimInstance Win32_Service -Filter "Name='TeamViewer'" -ErrorAction Stop)
+if($services.Count -gt 1){throw 'service state unavailable'}
+if($services.Count -eq 1){
+  if($null -eq $services[0].State -or $null -eq $services[0].StartMode){throw 'service state unavailable'}
+  if($services[0].State -eq 'Running' -and $services[0].StartMode -eq 'Auto'){$issues.Add('services.teamviewer_auto_running')}
+}""",
+        **{"services.teamviewer_auto_running": Rule("TeamViewer Service Running Automatically", FindingSeverity.LOW,
+                       "A TeamViewer service is running and configured to start automatically.")},
+    ),
+})
+
+
 def script_for(check: Check) -> str:
     return ("$ErrorActionPreference='Stop'; "
             "$issues=New-Object 'System.Collections.Generic.List[string]'; $unsupported=$false; $partial=$false; "

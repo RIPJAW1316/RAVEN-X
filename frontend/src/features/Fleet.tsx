@@ -37,7 +37,7 @@ import {
   presenceTone,
 } from "../lib/domain";
 import { DASH, formatDateTime, formatRelative, shortId, titleCase } from "../lib/format";
-import { KNOWN_SCANNERS } from "../lib/scanners";
+import { DEFAULT_SCANNER_IDS, KNOWN_SCANNERS } from "../lib/scanners";
 import type { FleetEndpoint, PresenceState } from "../types/api";
 import { EndpointTrustControls } from "./Enrollment";
 
@@ -373,7 +373,7 @@ function EndpointDetailView({
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>(
-    KNOWN_SCANNERS.map((scanner) => scanner.scanner_id),
+    DEFAULT_SCANNER_IDS,
   );
   const dispatch = useMutation((scannerIds: string[]) =>
     assessments.create(organizationId, endpointId, scannerIds),
@@ -586,6 +586,16 @@ export function ScannerPicker({
     <div className="scanner-picker">
       <span className="field-label">Scanners</span>
       <div className="chip-row">
+        <button type="button" className="ghost small"
+          onClick={() => onChange(DEFAULT_SCANNER_IDS.slice(0, 4))}>
+          Quick scan
+        </button>
+        <button type="button" className="ghost small"
+          onClick={() => onChange(KNOWN_SCANNERS.map((scanner) => scanner.scanner_id))}>
+          Full Windows scan
+        </button>
+      </div>
+      <div className="chip-row">
         {KNOWN_SCANNERS.map((scanner) => (
           <button
             key={scanner.scanner_id}
@@ -600,7 +610,7 @@ export function ScannerPicker({
         ))}
       </div>
       <small className="field-hint">
-        Read-only Windows checks. A request is accepted only when the selected agent supports these capabilities.
+        The expanded checks require the matching Windows agent. Older agents report them as not collected.
       </small>
     </div>
   );

@@ -24,7 +24,7 @@ import {
 } from "../components/ui";
 import { useApi, useMutation } from "../hooks/useApi";
 import { DASH, formatDateTime, formatRelative, shortId, titleCase } from "../lib/format";
-import { KNOWN_SCANNERS, scannerName } from "../lib/scanners";
+import { DEFAULT_SCANNER_IDS, KNOWN_SCANNERS, scannerName } from "../lib/scanners";
 import type { Schedule, ScheduleStatus } from "../types/api";
 
 const DAY_LABEL = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -350,7 +350,7 @@ function ScheduleComposer({
   );
   const [reference, setReference] = useState("");
   const [scanners, setScanners] = useState<string[]>(
-    KNOWN_SCANNERS.map((scanner) => scanner.scanner_id),
+    DEFAULT_SCANNER_IDS,
   );
 
   const groupList = useApi((signal) => groups.list(organizationId, signal), [organizationId], {

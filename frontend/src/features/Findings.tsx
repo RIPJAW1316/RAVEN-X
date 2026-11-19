@@ -66,6 +66,7 @@ export function Findings({
         eyebrow="Security findings"
         title="Findings"
         description="Occurrences observed by completed assessments across the organization."
+        actions={<button type="button" className="ghost" onClick={() => navigate("fix-issues")}>Fix Issues</button>}
       />
 
       <AsyncSection

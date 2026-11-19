@@ -1,6 +1,6 @@
-#define ReleaseVersion "1.0.0-rc10"
+#define ReleaseVersion "1.0.0-rc11"
 #ifndef StageRoot
-  #define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc10"
+  #define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc11"
 #endif
 #define MainScriptHash GetSHA256OfFile(StageRoot + "\scripts\install-agent.ps1")
 #define WrapperScriptHash GetSHA256OfFile(StageRoot + "\scripts\setup-agent.ps1")
@@ -20,7 +20,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=RAVEN-X-Windows-Setup-rc10
+OutputBaseFilename=RAVEN-X-Windows-Setup-rc11
 Compression=lzma2
 SolidCompression=yes
 Uninstallable=no

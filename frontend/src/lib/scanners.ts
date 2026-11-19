@@ -21,7 +21,7 @@ export interface ScannerDescriptor {
   requires: string;
 }
 
-export const KNOWN_SCANNERS: ScannerDescriptor[] = [
+const BASELINE_SCANNERS: ScannerDescriptor[] = [
   {
     scanner_id: "windows.firewall",
     name: "Windows Firewall",
@@ -67,6 +67,27 @@ export const KNOWN_SCANNERS: ScannerDescriptor[] = [
   { scanner_id: "windows.wifi", name: "Connected Wi-Fi Cipher", description: "Checks the active wireless cipher and open authentication when readable.", requires: "windows.powershell" },
   { scanner_id: "windows.audit", name: "Logon Audit Policy", description: "Checks whether both successful and failed logon events are audited.", requires: "windows.powershell" },
 ];
+
+export const EXPANDED_SCANNERS: ScannerDescriptor[] = [
+  { scanner_id: "windows.hotfix-recency", name: "Windows Hotfix Recency", description: "Checks the newest dated entry in Windows hotfix inventory.", requires: "windows.powershell" },
+  { scanner_id: "windows.smb-client-signing", name: "SMB Client Signing", description: "Reads whether the Windows SMB client requires signing.", requires: "windows.powershell" },
+  { scanner_id: "windows.smb-server-signing", name: "SMB Server Signing", description: "Reads whether the Windows SMB server requires signing.", requires: "windows.powershell" },
+  { scanner_id: "windows.smb-guest-logons", name: "SMB Guest Logons", description: "Reads whether the SMB client allows insecure guest connections.", requires: "windows.powershell" },
+  { scanner_id: "windows.defender-signature-age", name: "Defender Signature Age", description: "Reads the antivirus signature age for active Defender.", requires: "windows.powershell" },
+  { scanner_id: "windows.defender-pua", name: "Defender PUA Protection", description: "Reads Defender potentially unwanted application policy.", requires: "windows.powershell" },
+  { scanner_id: "windows.defender-exclusion-scope", name: "Defender User-Path Exclusions", description: "Recognizes Downloads and temporary path exclusions without reporting the paths.", requires: "windows.powershell" },
+  { scanner_id: "windows.pending-reboot", name: "Pending Servicing Reboot", description: "Reads Windows Update and component-servicing reboot markers.", requires: "windows.powershell" },
+  { scanner_id: "windows.powershell-script-block-logging", name: "PowerShell Script Block Policy", description: "Reads the Windows PowerShell machine script-block logging policy.", requires: "windows.powershell" },
+  { scanner_id: "windows.powershell-module-logging", name: "PowerShell Module Logging Policy", description: "Reads the Windows PowerShell machine module logging policy.", requires: "windows.powershell" },
+  { scanner_id: "windows.llmnr-policy", name: "LLMNR Machine Policy", description: "Checks whether DNS Client machine policy disables multicast name resolution.", requires: "windows.powershell" },
+  { scanner_id: "windows.wdigest-policy", name: "WDigest Credential Policy", description: "Detects an explicit WDigest credential-caching override.", requires: "windows.powershell" },
+  { scanner_id: "windows.security-event-log", name: "Windows Security Event Log", description: "Checks whether Windows reports the Security event log enabled.", requires: "windows.powershell" },
+  { scanner_id: "windows.secure-boot", name: "Secure Boot", description: "Reads UEFI Secure Boot state when the firmware exposes it.", requires: "windows.powershell" },
+  { scanner_id: "windows.remote-support-service", name: "Remote Support Service Review", description: "Checks for a running, automatically started TeamViewer service.", requires: "windows.powershell" },
+];
+
+export const KNOWN_SCANNERS = [...BASELINE_SCANNERS, ...EXPANDED_SCANNERS];
+export const DEFAULT_SCANNER_IDS = BASELINE_SCANNERS.map((scanner) => scanner.scanner_id);
 
 const BY_ID = new Map(KNOWN_SCANNERS.map((scanner) => [scanner.scanner_id, scanner]));
 

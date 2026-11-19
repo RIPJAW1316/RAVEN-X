@@ -55,6 +55,26 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
         return _report_response(dependencies.report_service, principal, context,
                                 assessment_ids=assessment_id)
 
+    @router.get("/organizations/{organization_id}/reports/fix-plan", tags=["Tenant Reports"])
+    def fix_plan(endpoint_id: str | None = Query(default=None, max_length=64),
+                 human=Depends(organization_context)):
+        from ..application.ai.offline_rules import build_offline_fix_plan
+
+        principal, context = human
+        report = _build_report(dependencies.report_service, principal, context, endpoint_id=endpoint_id)
+        plan = build_offline_fix_plan(report)
+        return JSONResponse({
+            "endpoints": [{key: row[key] for key in ("endpoint_id", "hostname", "scan_status")}
+                          for row in report["endpoints"]],
+            "items": [{key: item[key] for key in (
+                "finding_key", "occurrence_id", "assessment_id", "endpoint_id", "hostname", "scanner_id",
+                "rule_id", "severity", "title", "details", "action", "rationale",
+            )} for item in plan["plan"]],
+            "unverified_checks": plan["blind_spots"],
+            "findings_omitted": plan["findings_omitted"],
+            "analysis": plan["analysis"],
+        }, headers={"Cache-Control": "no-store"})
+
     @router.get("/organizations/{organization_id}/reports/fleet.csv", tags=["Tenant Reports"])
     def fleet_report_csv(assessment_id: list[str] | None = Query(default=None),
                          human=Depends(organization_context)):

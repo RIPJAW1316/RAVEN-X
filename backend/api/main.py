@@ -332,7 +332,9 @@ agent_message_processor = AgentMessageProcessor(
 agent_http_transport = HttpControlPlaneTransport()
 app.include_router(
     create_agent_http_router(agent_message_processor, agent_enrollment_service, agent_http_transport.outbox,
-                             work_repository=agent_work_repository, replay_guard=agent_replay_guard),
+                             # A full Windows scan can span many individually bounded OS queries.
+                             work_repository=agent_work_repository, replay_guard=agent_replay_guard,
+                             lease_duration=timedelta(minutes=15)),
     prefix="/api/v1/agent",
     tags=["Agent Transport"],
 )

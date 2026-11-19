@@ -170,6 +170,29 @@ export interface FleetEvidenceReport {
   endpoints: EndpointEvidenceReport[];
   advisory_note: string;
 }
+
+export interface FixPlanItem {
+  finding_key: string;
+  occurrence_id: string;
+  assessment_id: string;
+  endpoint_id: string;
+  hostname: string;
+  scanner_id: string;
+  rule_id: string | null;
+  severity: Severity;
+  title: string;
+  details: string;
+  action: string;
+  rationale: string;
+}
+
+export interface FixPlan {
+  endpoints: Pick<FleetEvidenceReport["endpoints"][number], "endpoint_id" | "hostname" | "scan_status">[];
+  items: FixPlanItem[];
+  unverified_checks: { endpoint_id: string; hostname: string; scanner_id: string; assessment_id: string; reason: string }[];
+  findings_omitted: number;
+  analysis: string;
+}
 export interface EndpointEvidenceReport {
   endpoint_id: string; hostname: string; platform: string; lifecycle_status: string; approved: boolean;
   presence_state: PresenceState; last_seen_at: string | null; selected_for_report: boolean;

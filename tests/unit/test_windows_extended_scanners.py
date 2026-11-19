@@ -2,7 +2,8 @@
 
 import json
 from dataclasses import asdict
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, run
+import sys
 
 import pytest
 
@@ -28,9 +29,9 @@ def _execute(scanner_id, raw):
 
 
 def test_extended_catalogue_has_unique_registered_identifiers():
-    assert len(MANIFESTS) == 24
+    assert len(MANIFESTS) == 39
     assert set(CHECKS).issubset(MANIFESTS)
-    assert len(CHECKS) == 20
+    assert len(CHECKS) == 35
 
 
 @pytest.mark.parametrize("scanner_id", CHECKS)
@@ -106,3 +107,40 @@ def test_extended_scripts_are_fixed_and_do_not_disclose_raw_names_or_secrets():
         assert "key=clear" not in script
         assert "Set-ItemProperty" not in script
         assert "Remove-" not in script
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell collectors")
+@pytest.mark.parametrize("scanner_id,fixture,status,issues", [
+    ("windows.smb-client-signing",
+     "function Get-SmbClientConfiguration {[pscustomobject]@{RequireSecuritySignature=$false}}",
+     "ok", ["smb.client_signing_not_required"]),
+    ("windows.smb-client-signing",
+     "function Get-SmbClientConfiguration {[pscustomobject]@{RequireSecuritySignature=$true}}",
+     "ok", []),
+    ("windows.defender-exclusion-scope",
+     r"""function Get-MpComputerStatus {[pscustomobject]@{AMRunningMode='Normal'}}
+         function Get-MpPreference {[pscustomobject]@{ExclusionPath=@('C:\Users\private-canary\Downloads')}}""",
+     "ok", ["defender.user_path_excluded"]),
+    ("windows.defender-signature-age",
+     "function Get-MpComputerStatus {[pscustomobject]@{AMRunningMode='Passive'}}",
+     "unsupported", []),
+    ("windows.hotfix-recency",
+     "function Get-HotFix {[pscustomobject]@{InstalledOn=(Get-Date).AddDays(-70)}; "
+     "[pscustomobject]@{InstalledOn=(Get-Date).AddDays(-4)}}",
+     "ok", []),
+    ("windows.hotfix-recency",
+     "function Get-HotFix {[pscustomobject]@{InstalledOn=(Get-Date).AddDays(-70)}}",
+     "ok", ["updates.hotfix_inventory_old"]),
+    ("windows.hotfix-recency",
+     "function Get-HotFix {[pscustomobject]@{InstalledOn=(Get-Date).AddDays(-70)}; "
+     "[pscustomobject]@{InstalledOn=$null}}",
+     "partial", []),
+])
+def test_new_collectors_evaluate_observed_powershell_values(scanner_id, fixture, status, issues):
+    from backend.agent.windows_extended_checks import script_for
+
+    result = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                  fixture + "\n" + script_for(CHECKS[scanner_id])],
+                 text=True, capture_output=True, timeout=15, check=True)
+    assert json.loads(result.stdout) == {"CollectionStatus": status, "Issues": issues}
+    assert "private-canary" not in result.stdout

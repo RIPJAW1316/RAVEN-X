@@ -83,7 +83,7 @@ def test_all_rc7_windows_collectors_cross_authenticated_https(tmp_path: Path):
                     assert agent.start().value == "ready"
                     agent.emit_startup_messages()
                     requested_ids = [scanner.manifest.scanner_id for scanner in windows_read_only_scanners()]
-                    assert len(requested_ids) == 24
+                    assert len(requested_ids) == 39
                     requested = human.post(tenant + "/assessments", headers=headers,
                                            json={"endpoint_id": str(grant.endpoint_id),
                                                  "scanner_ids": requested_ids})
@@ -98,7 +98,7 @@ def test_all_rc7_windows_collectors_cross_authenticated_https(tmp_path: Path):
                     assert report["state"] == "completed"
                     results = report["result"]["scanner_results"]
                     assert {item["scanner_id"] for item in results} == set(requested_ids)
-                    assert len(results) == 24
+                    assert len(results) == len(requested_ids)
                     assert all(item["status"] in {"success", "failed", "incompatible"} for item in results)
                     detail = human.get(tenant + f"/assessments/{assessment_id}/details", headers=headers)
                     assert detail.status_code == 200

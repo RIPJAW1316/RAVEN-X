@@ -24,7 +24,7 @@ from .windows_scanners import windows_read_only_scanners
 from .windows_store import AgentStateError, WindowsAgentStateStore
 
 
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.0.0-rc11"
 DEFAULT_RENEWAL_THRESHOLD_SECONDS = 7 * 24 * 3600.0
 
 

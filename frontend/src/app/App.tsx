@@ -24,6 +24,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   UsersRound,
+  Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import { Schedules } from "../features/Schedules";
 import { Settings } from "../features/Settings";
 
 const Analyst = lazy(() => import("../features/AnalystPage").then(({ Analyst }) => ({ default: Analyst })));
+const FixIssues = lazy(() => import("../features/FixIssues").then(({ FixIssues }) => ({ default: FixIssues })));
 
 interface NavItem {
   id: string;
@@ -73,6 +75,7 @@ const NAVIGATION: NavGroup[] = [
     label: "Security",
     items: [
       { id: "findings", label: "Findings", icon: ShieldAlert },
+      { id: "fix-issues", label: "Fix Issues", icon: Wrench },
       { id: "activity", label: "Activity", icon: Activity },
       { id: "analyst", label: "AI Analyst", icon: Sparkles },
     ],
@@ -337,6 +340,10 @@ function Screen({
       return <Groups organizationId={organizationId} />;
     case "findings":
       return <Findings organizationId={organizationId} navigate={navigate} />;
+    case "fix-issues":
+      return <Suspense fallback={<div className="page-loading" role="status">Loading Fix Issues…</div>}>
+        <FixIssues key={organizationId} organizationId={organizationId} navigate={navigate} />
+      </Suspense>;
     case "activity":
       return <ActivityPage organizationId={organizationId} />;
     case "analyst":

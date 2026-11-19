@@ -45,7 +45,7 @@ import {
   SEVERITY_RANK,
 } from "../lib/domain";
 import { DASH, formatDateTime, formatDuration, formatRelative, shortId } from "../lib/format";
-import { KNOWN_SCANNERS, scannerName } from "../lib/scanners";
+import { DEFAULT_SCANNER_IDS, scannerName } from "../lib/scanners";
 import type { Assessment, AssessmentState, FindingDetail, ScannerResultSummary } from "../types/api";
 import { ScannerPicker } from "./Fleet";
 import { AnalystPanel } from "./Analyst";
@@ -277,7 +277,7 @@ function Composer({
 }) {
   const [endpointId, setEndpointId] = useState("");
   const [scanners, setScanners] = useState<string[]>(
-    KNOWN_SCANNERS.map((scanner) => scanner.scanner_id),
+    DEFAULT_SCANNER_IDS,
   );
 
   const endpoints = useApi(

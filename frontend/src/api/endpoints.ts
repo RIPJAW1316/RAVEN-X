@@ -44,6 +44,11 @@ import type {
 const org = (id: string) => `/api/v1/organizations/${encodeURIComponent(id)}`;
 
 export const insights = {
+  fixPlan: (id: string, endpointId: string, signal?: AbortSignal) =>
+    request<import("../types/api").FixPlan>(
+      `${org(id)}/reports/fix-plan${endpointId ? `?endpoint_id=${encodeURIComponent(endpointId)}` : ""}`,
+      { signal },
+    ),
   fleetCsv: (id: string) => requestBlob(`${org(id)}/reports/fleet.csv`),
   fleetPdf: (id: string, endpointId?: string) => requestBlob(endpointId
     ? `${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report.pdf`

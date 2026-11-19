@@ -19,11 +19,11 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "b53ac0fea11432badcc13e89d0d0f3966d1689bd"
-ACCEPTED_DIFF = "97a03d490a87183a2d0f89f247250bd4349e1f3f68b1e2476f8788e55d422f0f"
-VERSION = "1.0.0-rc10"
-EXTENDED_CHECKS_SHA256 = "eaa8d9b386b13222dba73ff90d1726f01a5bedb5a1e751f48df6b5ec277bfb93"
+ACCEPTED_DIFF = "2a2a8693049af4644312d8e234c6cd5c589c317792326c4e2aecd354c10aa34c"
+VERSION = "1.0.0-rc11"
+EXTENDED_CHECKS_SHA256 = "af62c4a4da9c41673e0a210fd0f473271bd85ece6d3ad4d78f22c8f10907add5"
 ACCEPTED_PATHS = (
-    "backend/agent/windows_scanners.py", "backend/application/assessment/local_orchestrator.py",
+    "backend/agent/host.py", "backend/agent/windows_scanners.py", "backend/application/assessment/local_orchestrator.py",
     "backend/application/reporting/detail.py", "backend/application/reporting/fleet_report.py",
     "scripts/e2e-server.py",
     "tests/integration/test_https_windows_golden_path.py", "tests/integration/test_tenant_fleet_report_sql.py",
@@ -33,6 +33,7 @@ ACCEPTED_PATHS = (
     "tests/unit/test_windows_read_only_scanners.py",
     "backend/domain/enrollment/models.py", "scripts/install-agent.ps1", "scripts/setup-agent.ps1",
     "scripts/RAVEN-X-Windows-Setup.iss", "scripts/setup-token-pipe.iss",
+    "tests/unit/test_windows_extended_scanners.py", "tests/integration/test_https_windows_all_scanners_rc7.py",
 )
 WHEEL_NAMES = frozenset({
     "anyio-4.16.0-py3-none-any.whl", "certifi-2026.10.23-py3-none-any.whl",

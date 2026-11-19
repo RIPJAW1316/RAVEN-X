@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import type { Assessment, AssessmentDetail, AssessmentState, AuditPage, FleetEvidenceReport,
   OrganizationRef, SecurityMetrics, SecurityOverview, SessionResponse } from "../src/types/api";
 
@@ -294,6 +295,44 @@ test("Enrollment renews eligible expired tokens and keeps their ID", async ({ pa
   await expect(page.getByRole("row", { name: /Test workstation/ })).toContainText("pending");
   await expect(page.getByRole("status").filter({ hasText: "Use the same enrollment ID and saved token." })).toBeVisible();
   await expect(page.getByRole("button", { name: "Renew token", exact: true })).toHaveCount(0);
+});
+
+test("Fix Issues exports a safe local script and portable HTML", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await page.route("**/reports/fix-plan", route => route.fulfill({ json: {
+    endpoints: [{ endpoint_id: "fixture-pc", hostname: "Review PC", scan_status: "partial" }],
+    items: [{
+      finding_key: "fixture-record", endpoint_id: "fixture-pc", hostname: "Review PC",
+      occurrence_id: "fixture-finding", assessment_id: "fixture-assessment",
+      scanner_id: "windows.smb-client-signing", rule_id: "smb.client_signing_not_required",
+      severity: "medium", title: "SMB Client Signing Not Required",
+      details: "<script>untrusted evidence</script>", action: "Require outbound SMB signing.",
+      rationale: "Signing protects SMB traffic integrity.",
+    }],
+    findings_omitted: 0, unverified_checks: [], analysis: "### Prioritized Fix Plan",
+  } }));
+  await new AssessmentOutcomePortal(page).signIn();
+  await page.getByRole("link", { name: "Fix Issues", exact: true }).click();
+  await page.getByText("SMB Client Signing Not Required", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Recommended action" })).toBeVisible();
+  const pendingScript = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download PowerShell" }).click();
+  const script = await pendingScript;
+  expect(script.suggestedFilename()).toBe("ravenx-smb-client-signing.ps1");
+  const source = await readFile(await script.path(), "utf8");
+  expect(source).toContain("SupportsShouldProcess");
+  expect(source).toContain("if (-not $Apply)");
+  expect(source).toContain("Set-SmbClientConfiguration -RequireSecuritySignature $true");
+  expect(source).not.toContain("untrusted evidence");
+
+  const pendingReport = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export HTML" }).click();
+  const report = await pendingReport;
+  expect(report.suggestedFilename()).toBe("ravenx-fix-plan.html");
+  const document = await readFile(await report.path(), "utf8");
+  expect(document).toContain("fixture-assessment");
+  expect(document).toContain("&lt;script&gt;untrusted evidence&lt;/script&gt;");
+  expect(document).not.toContain("<script>");
 });
 
 test("posture with unknown evidence and a paginated printable machine report", async ({ page }, testInfo) => {

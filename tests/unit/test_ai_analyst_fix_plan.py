@@ -1,4 +1,4 @@
-"""Focused regression suite for RAVEN-X AI Analyst fix plan, 24-check accounting, and offline rules."""
+"""Focused regression suite for RAVEN-X AI Analyst fix plans and coverage."""
 
 from datetime import datetime, timezone
 import json
@@ -129,7 +129,46 @@ def _headers(world):
     return {"Authorization": "Bearer " + world.token}
 
 
-def test_full_24_check_assessment_accounts_for_all_checks():
+def test_fix_plan_uses_report_permissions_and_organization_evidence():
+    world = _world(permissions=("reports.read",))
+    org = world.organization.organization_id
+    endpoint = Endpoint(EndpointId.new(), "review-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
+                        created_at=NOW, organization_id=org)
+    foreign = Endpoint(EndpointId.new(), "foreign-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
+                       created_at=NOW, organization_id=world.foreign_organization.organization_id)
+    world.endpoints.add(endpoint)
+    world.endpoints.add(foreign)
+    finding = {
+        "finding_id": "signing", "occurrence_id": "scan-1:signing", "severity": "medium",
+        "title": "SMB Client Signing Not Required", "details": "Outbound signing is optional.",
+        "metadata": {"scanner_id": "windows.smb-client-signing", "rule_id": "smb.client_signing_not_required"},
+    }
+    result = SimpleNamespace(status="completed", findings=[finding], scanner_results=[{
+        "scanner_id": "windows.smb-client-signing", "status": "success", "findings": [finding],
+        "execution_evidence": {"completeness": "complete"},
+    }])
+    world.assessments.items.append(_assessment(
+        endpoint, org, "scan-1", "completed", NOW,
+        scanner_ids=("windows.smb-client-signing", "windows.secure-boot"), result=result,
+    ))
+    path = f"/api/v1/organizations/{org}/reports/fix-plan"
+    assert world.client.get(path).status_code == 401
+    assert world.client.get(path, params={"endpoint_id": str(foreign.endpoint_id)},
+                            headers=_headers(world)).status_code == 404
+    response = world.client.get(path, headers=_headers(world))
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()
+    assert [row["hostname"] for row in data["endpoints"]] == ["review-pc"]
+    item, = data["items"]
+    assert item["assessment_id"] == "scan-1"
+    assert item["rule_id"] == "smb.client_signing_not_required"
+    assert "require outbound SMB signing" in item["action"]
+    assert data["unverified_checks"][0]["scanner_id"] == "windows.secure-boot"
+    assert world.provider.prioritize_prompts == []
+
+
+def test_full_assessment_accounts_for_all_checks():
     world = _world()
     org = world.organization.organization_id
     endpoint = Endpoint(EndpointId.new(), "full-scan-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
@@ -138,9 +177,9 @@ def test_full_24_check_assessment_accounts_for_all_checks():
     world.presence.upsert(EndpointPresence(str(endpoint.endpoint_id), str(org), PresenceState.ONLINE, last_seen_at=NOW))
 
     all_scanners = [s.manifest.scanner_id for s in windows_read_only_scanners()]
-    assert len(all_scanners) == 24
+    assert len(all_scanners) == 39
 
-    # 1 finding from firewall, remaining 23 scanners succeed with 0 findings
+    # Firewall reports one finding. Every other scanner fully collects evidence.
     findings = [{
         "finding_id": "fw-1",
         "occurrence_id": "scan-full:fw-1",
@@ -183,7 +222,7 @@ def test_full_24_check_assessment_accounts_for_all_checks():
     assert data["status"] == "available"
     assert data["fallback_used"] is False
 
-    # Check 24-check accounting
+    # Account for the entire catalogue.
     plan = data["plan"]
     blind_spots = data["blind_spots"]
     out_of_scope = data["out_of_scope_checks"]
@@ -251,8 +290,7 @@ def test_subset_assessment_with_missing_result():
     assert uac_blind_spots[0]["status"] == "unverified"
     assert "No execution result" in uac_blind_spots[0]["reason"]
 
-    # 21 unrequested checks are out-of-scope
-    assert len(data["out_of_scope_checks"]) == 21
+    assert len(data["out_of_scope_checks"]) == len(windows_read_only_scanners()) - len(requested_subset)
     for ooc in data["out_of_scope_checks"]:
         assert ooc["scanner_id"] not in requested_subset
         assert "Not requested" in ooc["reason"]

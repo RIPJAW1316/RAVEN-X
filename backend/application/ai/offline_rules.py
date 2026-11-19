@@ -1,6 +1,6 @@
-"""Server-owned deterministic fix plan and 24-check rule ground truth.
+"""Server-owned deterministic fix plan for the Windows scanner catalogue.
 
-All 24 checks from windows_read_only_scanners() are accounted for.
+Checks in windows_read_only_scanners() are accounted for.
 Plain-language fix actions are rendered by the server. If inference is
 disabled, fails, times out, or hallucinates, this deterministic engine
 generates the complete plan labeled 'Offline rules'.
@@ -25,6 +25,66 @@ _SEVERITY_RANKS: dict[str, int] = {
 
 # Rule-level remediation mappings for known checks
 _RULE_ACTIONS: dict[str, tuple[str, str]] = {
+    "updates.hotfix_inventory_old": (
+        "Check the endpoint's managed update history and compare its build with the required updates.",
+        "The hotfix inventory covers only a subset of Windows updates.",
+    ),
+    "smb.client_signing_not_required": (
+        "Review compatibility with required file shares, then require outbound SMB signing through domain policy or a local administrator.",
+        "Signing protects SMB traffic integrity.",
+    ),
+    "smb.server_signing_not_required": (
+        "Review compatibility with approved SMB clients, then require inbound SMB signing through domain policy or a local administrator.",
+        "Signing protects SMB traffic integrity.",
+    ),
+    "smb.insecure_guest_allowed": (
+        "Migrate required shares to authenticated access, then disable insecure SMB guest logons.",
+        "Guest access lacks standard SMB signing and encryption protections.",
+    ),
+    "defender.signatures_stale": (
+        "Update Defender security intelligence and investigate its update source if signatures stay stale.",
+        "Stale security intelligence reduces coverage for newer threats.",
+    ),
+    "defender.pua_not_blocking": (
+        "Review the PUA audit results and configure blocking where approved.",
+        "Audit mode records detections without blocking potentially unwanted applications.",
+    ),
+    "defender.user_path_excluded": (
+        "Review the matching exclusions in Windows Security and narrow or remove any unapproved exclusion.",
+        "User download and temporary locations regularly receive new files.",
+    ),
+    "updates.reboot_pending": (
+        "Schedule a maintenance reboot and rerun the check after Windows has restarted.",
+        "Some servicing changes take effect only after a reboot.",
+    ),
+    "powershell.script_block_not_enforced": (
+        "Enable PowerShell script block logging where required and restrict access to the resulting events.",
+        "Script blocks can contain sensitive text and should be available only to authorized reviewers.",
+    ),
+    "powershell.module_logging_not_enforced": (
+        "Configure module logging and select the modules required by your audit policy.",
+        "The enabled setting and the selected modules determine what is recorded.",
+    ),
+    "dns.llmnr_not_disabled": (
+        "Review local name-resolution dependencies and enable the Turn off multicast name resolution policy.",
+        "Disabling this fallback reduces exposure to untrusted local name responses.",
+    ),
+    "auth.wdigest_credential_caching": (
+        "Check legacy authentication dependencies, then disable the WDigest credential-caching override through managed policy.",
+        "Avoid retaining reusable logon secrets unnecessarily.",
+    ),
+    "audit.security_log_disabled": (
+        "Review event-log service and policy configuration, then restore Security log collection.",
+        "A disabled log reduces the evidence available for audit and incident response.",
+    ),
+    "platform.secure_boot_off": (
+        "Review firmware mode and recovery readiness, then enable Secure Boot where supported by the deployment.",
+        "Secure Boot helps enforce the trusted boot chain.",
+    ),
+    "services.teamviewer_auto_running": (
+        "Confirm that the remote support service is authorized, patched and required. Disable it locally if it is unnecessary.",
+        "An approved remote support service still needs access and lifecycle review.",
+    ),
     "firewall.profile": (
         "Enable Windows Defender Firewall for all network profiles (Domain, Private, Public).",
         "Inbound connections are uninspected when firewall profiles are disabled.",
@@ -300,7 +360,7 @@ def build_offline_fix_plan(report: Mapping[str, Any]) -> dict[str, Any]:
         scanner_results_list = endpoint.get("scanner_results", ())
         scanner_results = {str(item.get("scanner_id")): item for item in scanner_results_list if isinstance(item, Mapping)}
 
-        # 1. Account for all 24 checks
+        # Compare every current catalogue entry with this assessment's scope.
         for sid, meta in registry.items():
             if sid not in requested_ids:
                 out_of_scope_checks.append({
@@ -503,7 +563,7 @@ def render_plan_markdown(
     if out_of_scope:
         lines.append("### Out-of-Scope Checks")
         lines.append("")
-        lines.append("The following checks from the 24-check catalogue were not requested in the selected assessment scope:")
+        lines.append("The following checks were not requested in the selected assessment scope:")
         # Group by scanner_id for compact reading
         sids = sorted({str(x.get("scanner_id")) for x in out_of_scope})
         for sid in sids:
