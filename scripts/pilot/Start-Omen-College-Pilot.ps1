@@ -9,6 +9,7 @@ param(
     # An operator can explicitly pass -EnableLocalAi:$false for recovery.
     [switch]$EnableLocalAi = $true,
     [switch]$DisableLocalAi,
+    [string]$AiModelId = 'meta-llama-3.1-8b-instruct',
     [switch]$LoopbackOnly,
     [switch]$ManagedByLauncher,
     [string]$AdministratorEmail
@@ -60,22 +61,22 @@ try {
     Push-Location $root
     $locationPushed = $true
     if ($EnableLocalAi -and -not $DisableLocalAi) {
-        $modelId = 'meta-llama-3.1-8b-instruct'
         $baseUrl = 'http://127.0.0.1:1234/v1'
         try {
             $models = Invoke-RestMethod -Method Get -Uri "$baseUrl/models" -TimeoutSec 10 -ErrorAction Stop
         } catch {
             throw 'LM Studio is not reachable on Omen loopback port 1234. Start its local server and load the model before enabling AI.'
         }
-        if ($modelId -cnotin @($models.data | ForEach-Object { [string]$_.id })) {
-            throw 'LM Studio does not list the required meta-llama-3.1-8b-instruct model as loaded.'
+        $loaded = @($models.data | ForEach-Object { [string]$_.id })
+        if ($AiModelId -cnotin $loaded) {
+            throw "LM Studio does not list the requested model '$AiModelId' as loaded. Available models: $($loaded -join ', ')."
         }
         $env:RAVENX_LOCAL_AI_BASE_URL = $baseUrl
-        $env:RAVENX_LOCAL_AI_MODEL = $modelId
+        $env:RAVENX_LOCAL_AI_MODEL = $AiModelId
         $env:RAVENX_LOCAL_AI_TIMEOUT_SECONDS = '120'
         $env:RAVENX_LOCAL_AI_MAX_OUTPUT_TOKENS = '512'
         $env:RAVENX_LOCAL_AI_ENABLED = 'true'
-        Write-Host "Local AI enabled through Omen loopback: $modelId"
+        Write-Host "Local AI enabled through Omen loopback: $AiModelId"
     } else {
         $env:RAVENX_LOCAL_AI_ENABLED = 'false'
     }

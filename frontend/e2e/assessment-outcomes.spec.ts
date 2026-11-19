@@ -249,6 +249,24 @@ test("appearance persists and formatted advisories keep model output inert", asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test("AI Analyst requests the fix plan and labels offline results", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  const portal = new AssessmentOutcomePortal(page);
+  await portal.signIn();
+  await page.getByRole("link", { name: "AI Analyst", exact: true }).click();
+  await page.route("**/ai/analyze", route => route.fulfill({ json: {
+    status: "available", model: "Offline rules", provider: "offline", fallback_used: true,
+    source: { assessment_ids: ["fixture-run"] },
+    analysis: "### Prioritized Fix Plan\n\nReview the observed BitLocker protection state.",
+  } }));
+  const request = page.waitForRequest(req => req.method() === "POST" && req.url().endsWith("/ai/analyze"));
+  await page.getByRole("button", { name: "Analyze evidence" }).click();
+
+  expect((await request).postDataJSON()).toEqual({ offline_plan: true });
+  await expect(page.getByText("Offline rules", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Prioritized Fix Plan" })).toBeVisible();
+});
+
 test("posture with unknown evidence and a paginated printable machine report", async ({ page }, testInfo) => {
   test.skip(!fixtureResponses, "Presentation fixture");
   await new AssessmentOutcomePortal(page).signIn();

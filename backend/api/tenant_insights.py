@@ -124,17 +124,19 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
             body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise _error(400, "MALFORMED_JSON", "request body is not valid JSON")
-        if (not isinstance(body, dict) or set(body) - {"endpoint_id", "assessment_ids"}
+        if (not isinstance(body, dict) or set(body) - {"endpoint_id", "assessment_ids", "offline_plan"}
                 or (body.get("endpoint_id") is not None and not isinstance(body["endpoint_id"], str))
                 or (body.get("assessment_ids") is not None and
                     (not isinstance(body["assessment_ids"], list) or
-                     not all(isinstance(value, str) for value in body["assessment_ids"])))):
+                     not all(isinstance(value, str) for value in body["assessment_ids"])))
+                or ("offline_plan" in body and type(body["offline_plan"]) is not bool)):
             raise _error(422, "INVALID_REQUEST", "invalid analysis selection")
         principal, context = human
         try:
             result = await asyncio.to_thread(
                 dependencies.analysis_service.analyze, principal, context,
-                endpoint_id=body.get("endpoint_id"), assessment_ids=body.get("assessment_ids"))
+                endpoint_id=body.get("endpoint_id"), assessment_ids=body.get("assessment_ids"),
+                offline_plan=bool(body.get("offline_plan", False)))
         except PermissionError:
             raise _error(403, "FORBIDDEN", "permission denied")
         except KeyError:

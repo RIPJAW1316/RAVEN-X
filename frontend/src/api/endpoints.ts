@@ -50,7 +50,14 @@ export const insights = {
     : `${org(id)}/reports/fleet.pdf`),
   fleetReport: (id: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/reports/fleet`, { signal }),
   endpointReport: (id: string, endpointId: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report`, { signal }),
-  analyze: (id: string, endpointId?: string) => request<LocalAnalysis>(`${org(id)}/ai/analyze`, { method: "POST", body: endpointId ? { endpoint_id: endpointId } : {} }),
+  analyze: (id: string, endpointId?: string, offlinePlan?: boolean) =>
+    request<LocalAnalysis>(`${org(id)}/ai/analyze`, {
+      method: "POST",
+      body: {
+        ...(endpointId ? { endpoint_id: endpointId } : {}),
+        ...(offlinePlan !== undefined ? { offline_plan: offlinePlan } : {}),
+      },
+    }),
 };
 
 export const enrollment = {

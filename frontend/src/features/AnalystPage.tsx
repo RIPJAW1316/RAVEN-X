@@ -106,7 +106,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
   const [endpointId, setEndpointId] = useState("");
   const [result, setResult] = useState<LocalAnalysis | null>(null);
   const report = useApi((signal) => insights.fleetReport(organizationId, signal), [organizationId]);
-  const analyze = useMutation((id: string) => insights.analyze(organizationId, id || undefined));
+  const analyze = useMutation((id: string) => insights.analyze(organizationId, id || undefined, true));
   const reasons: Record<string, string> = {
     LOCAL_AI_DISABLED: "Local inference is disabled. An administrator can connect a loopback Llama runtime using the deployment guide.",
     LOCAL_AI_UNAVAILABLE: "The local inference service could not return a valid response. Stored evidence remains available.",
@@ -127,7 +127,9 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
     </AsyncSection>
     {analyze.error && <ErrorState error={analyze.error} />}
     {result && <div className="analysis-result" aria-live="polite">
-      <Badge tone={result.status === "available" ? "info" : "warn"}>{result.status === "available" ? "AI advisory" : "Analysis unavailable"}</Badge>
+      <Badge tone={result.status === "available" ? (result.model === "Offline rules" ? "warn" : "info") : "warn"}>
+        {result.status === "available" ? (result.model === "Offline rules" ? "Offline rules" : "AI advisory") : "Analysis unavailable"}
+      </Badge>
       {result.status === "available" ? <>
         <p className="panel-note">{result.model} · {formatDateTime(result.generated_at ?? null)}. {result.notice}</p>
         <article className="analysis-narrative" aria-label="Assessment interpretation">
@@ -135,7 +137,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
             {unwrapAnalysis(result.analysis ?? "")}
           </Markdown>
         </article>
-        {result.coverage && <p className="panel-note">{result.coverage.included_endpoints} machines and {result.coverage.included_findings} findings included. {result.coverage.truncated ? "Evidence was truncated to fit the model context; consult the full report." : ""}</p>}
+        {result.coverage && <p className="panel-note">{result.coverage.included_endpoints} machines and {result.coverage.included_findings} findings included. {result.coverage.truncated ? "Some findings were omitted by report limits; consult the full report." : ""}</p>}
       </> : <p>{reasons[result.reason_code ?? ""] ?? "Analysis is unavailable for the selected evidence."}</p>}
       {result.source.assessment_ids.length > 0 && <div className="report-actions"><span className="muted">Source assessments</span>
         {result.source.assessment_ids.map((id) => <button key={id} type="button" className="link mono" onClick={() => navigate("assessments", id)}>{shortId(id)}</button>)}

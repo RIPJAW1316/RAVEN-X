@@ -2,6 +2,7 @@
 
 from collections import Counter
 from datetime import datetime, timezone
+import re
 from typing import Mapping
 
 from ...domain.endpoint import EndpointStatus
@@ -240,12 +241,29 @@ def _findings(result, limit):
             if isinstance(item, Mapping):
                 evidence.append({key: _text(item.get(key), 256) for key in
                                  ("source", "description", "observed_value", "expected_value")})
+        raw_meta = finding.get("metadata")
+        meta = raw_meta if isinstance(raw_meta, Mapping) else {}
+        scanner_id = (
+            _text(meta.get("scanner_id"), 100)
+            or _text(finding.get("scanner_id"), 100)
+            or _text(finding.get("component"), 100)
+            or None
+        )
+        rule_id = _text(meta.get("rule_id"), 100) or _text(finding.get("rule_id"), 100) or None
+        resource_key = meta.get("resource_key") or finding.get("resource_key")
+        volume = resource_key if (
+            scanner_id == "windows.bitlocker" and isinstance(resource_key, str)
+            and re.fullmatch(r"[a-zA-Z]:\\?", resource_key)
+        ) else None
         projected.append({
             "finding_id": _text(finding.get("finding_id"), 128) or None,
+            "occurrence_id": _text(finding.get("occurrence_id"), 128) or None,
             "severity": severity,
             "title": _text(finding.get("title") or finding.get("name"), 200),
             "description": _text(finding.get("description") or finding.get("details"), 500),
-            "scanner_id": _text(finding.get("scanner_id") or finding.get("component"), 100) or None,
+            "scanner_id": scanner_id,
+            "rule_id": rule_id,
+            "resource_key": volume,
             "evidence": evidence,
         })
     return projected, malformed, max(0, len(raw) - malformed - len(projected))
@@ -271,5 +289,6 @@ def _scanner_results(result):
         findings = item.get("findings")
         projected.append({"scanner_id": _text(item.get("scanner_id"), 100), "status": status,
                           "finding_count": len(findings) if status in {"success", "failed"} and isinstance(findings, (list, tuple)) else 0,
-                          "has_error": item.get("error") is not None or item.get("error_category") is not None or status == "unknown"})
+                          "has_error": item.get("error") is not None or item.get("error_category") is not None or status == "unknown",
+                          "error_category": _text(item.get("error_category"), 40) or None})
     return projected
