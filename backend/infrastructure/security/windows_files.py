@@ -52,6 +52,19 @@ def _windows_security():
     return win32security, ntsecuritycon
 
 
+def _current_user_sid():
+    """Use the authenticated process identity even when names are ambiguous."""
+    import win32api
+
+    win32security, ntsecuritycon = _windows_security()
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), ntsecuritycon.TOKEN_QUERY)
+    try:
+        sid, _attributes = win32security.GetTokenInformation(token, win32security.TokenUser)
+        return sid
+    finally:
+        token.Close()
+
+
 def _absolute_local_path(path) -> Path:
     value = Path(path)
     if not value.is_absolute() or str(value).startswith("\\\\") or ".." in value.parts:
@@ -234,8 +247,7 @@ def protect_private_directory(path) -> Path:
     if not directory.is_dir():
         raise WindowsFileSecurityError("protected directory does not exist")
     win32security, ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     system_sid = win32security.CreateWellKnownSid(win32security.WinLocalSystemSid)
     admin_sid = win32security.CreateWellKnownSid(win32security.WinBuiltinAdministratorsSid)
     dacl = win32security.ACL()
@@ -274,8 +286,7 @@ def verify_private_directory(path) -> Path:
 
 def _verify_private_directory(path: Path) -> None:
     win32security, ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     owners = {win32security.ConvertSidToStringSid(user_sid), _SYSTEM, _ADMINS}
     allowed = owners | {_OWNER_RIGHTS}
     descriptor = _security_descriptor(path)
@@ -359,8 +370,7 @@ def trusted_owner_sids() -> set[str]:
     Capability SIDs and ordinary group SIDs are not owners we trust.
     """
     win32security, _ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     return {
         win32security.ConvertSidToStringSid(user_sid),
         _SYSTEM, _ADMINS, _LOCAL_SERVICE, _NETWORK_SERVICE, _TRUSTED_INSTALLER,
@@ -369,8 +379,7 @@ def trusted_owner_sids() -> set[str]:
 
 def trusted_identity_sids() -> set[str]:
     win32security, _ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     return {win32security.ConvertSidToStringSid(user_sid), _SYSTEM, _ADMINS, _OWNER_RIGHTS}
 
 
@@ -693,8 +702,7 @@ def _security_from_handle(handle, *, directory: bool) -> None:
 
 def _private_security_descriptor(*, directory: bool):
     win32security, _ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     user = win32security.ConvertSidToStringSid(user_sid)
     inherit = "OICI" if directory else ""
     aces = []
@@ -755,8 +763,11 @@ def _create_relative(root_handle, name: str, *, directory: bool):
             ctypes.byref(handle), ctypes.c_uint32(access), ctypes.byref(attributes), ctypes.byref(status_block),
             None, ctypes.c_uint32(0x80), ctypes.c_uint32(share), ctypes.c_uint32(2), ctypes.c_uint32(options), None,
             ctypes.c_uint32(0))
-        if (status & 0xFFFFFFFF) >= 0x80000000:
-            raise WindowsFileSecurityError("bound object could not be created")
+        status_code = status & 0xFFFFFFFF
+        if status_code >= 0x80000000:
+            raise WindowsFileSecurityError(
+                f"bound object could not be created (NTSTATUS 0x{status_code:08X})", status=status_code
+            )
         return handle.value
     finally:
         kernel32.LocalFree(sd_pointer)
@@ -871,8 +882,7 @@ def protect_private_secret_file(path) -> Path:
     if not file_path.is_file():
         raise WindowsFileSecurityError("protected file does not exist")
     win32security, ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     system_sid = win32security.CreateWellKnownSid(win32security.WinLocalSystemSid)
     admin_sid = win32security.CreateWellKnownSid(win32security.WinBuiltinAdministratorsSid)
     dacl = win32security.ACL()
@@ -929,8 +939,7 @@ def verify_verifier_key_custody(path, *, production: bool) -> Path:
 
 def _verify_private_key_acl(path: Path) -> None:
     win32security, ntsecuritycon = _windows_security()
-    import win32api
-    user_sid, _domain, _account_type = win32security.LookupAccountName(None, win32api.GetUserName())
+    user_sid = _current_user_sid()
     allowed = {
         win32security.ConvertSidToStringSid(user_sid),
         _SYSTEM,

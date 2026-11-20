@@ -138,6 +138,22 @@ def test_empty_database_bootstraps_once_and_restart_reloads_the_same_key(tmp_pat
     assert _identity(database) == verifier_key_id(first)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires a Windows process token")
+def test_verifier_bootstrap_uses_token_sid_when_account_name_resolves_to_another_sid(
+    monkeypatch, allow_unprotected_key
+):
+    import win32security
+
+    other_sid = win32security.CreateWellKnownSid(win32security.WinBuiltinUsersSid)
+    monkeypatch.setattr(win32security, "LookupAccountName", lambda *_: (other_sid, "", 4))
+    database = _safe_dir() / "raven_x.db"
+    _empty_database(database)
+
+    first = prepare_persistent_verifier_key(database, environ={}, environment="production")
+    assert _identity(database) == verifier_key_id(first)
+    assert prepare_persistent_verifier_key(database, environ={}, environment="production") == first
+
+
 def test_missing_key_is_not_regenerated_over_active_hmac_credentials(tmp_path, allow_unprotected_key):
     tmp_path = _safe_dir()
     database = tmp_path / "raven_x.db"
