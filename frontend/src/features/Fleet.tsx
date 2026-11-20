@@ -30,6 +30,7 @@ import {
   StatusBadge,
 } from "../components/ui";
 import { useApi, useMutation, usePolling } from "../hooks/useApi";
+import { hostedDemo } from "../lib/hostedDemo";
 import {
   COMPLIANCE_LABEL,
   COMPLIANCE_REASON,
@@ -410,9 +411,9 @@ function EndpointDetailView({
               actions={
                 <>
                 <button type="button" className="ghost" onClick={() => navigate("reports", endpoint.endpoint_id)}>Machine report</button>
-                <EndpointTrustControls organizationId={organizationId} endpointId={endpoint.endpoint_id}
-                  hostname={endpoint.hostname} status={endpoint.status} onChanged={detail.reload} />
-                <button
+                {!hostedDemo && <EndpointTrustControls organizationId={organizationId} endpointId={endpoint.endpoint_id}
+                  hostname={endpoint.hostname} status={endpoint.status} onChanged={detail.reload} />}
+                {!hostedDemo && <button
                   type="button"
                   className="primary"
                   onClick={() => setConfirmOpen(true)}
@@ -424,7 +425,7 @@ function EndpointDetailView({
                   }
                 >
                   <Radar size={15} aria-hidden="true" /> Run assessment
-                </button>
+                </button>}
                 </>
               }
             />

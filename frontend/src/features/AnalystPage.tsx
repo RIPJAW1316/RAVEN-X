@@ -16,6 +16,7 @@ import {
 } from "../components/ui";
 import { useApi, useMutation } from "../hooks/useApi";
 import { normalizeSeverity } from "../lib/domain";
+import { hostedDemo } from "../lib/hostedDemo";
 import { formatDateTime, formatRelative, shortId } from "../lib/format";
 import type { LocalAnalysis } from "../types/api";
 import { scannerName } from "../lib/scanners";
@@ -104,7 +105,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
   organizationId: string; navigate: (section: string, ...params: string[]) => void;
 }) {
   const [scopeKey, setScopeKey] = useState("");
-  const [model, setModel] = useState<"lm_studio" | "offline" | "gemini">("lm_studio");
+  const [model, setModel] = useState<"lm_studio" | "offline" | "gemini">(hostedDemo ? "gemini" : "lm_studio");
   const [result, setResult] = useState<LocalAnalysis | null>(null);
   const report = useApi((signal) => insights.fleetReport(organizationId, signal), [organizationId]);
   const analyze = useMutation((options: Parameters<typeof insights.analyze>[1]) =>
@@ -146,7 +147,9 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
   return (
     <Panel title="Evidence analysis" icon={<Sparkles size={15} />}>
       <p className="panel-note">
-        {model === "gemini" && scopeKey !== "__demo__"
+        {hostedDemo
+          ? "Compare the Gemini result recorded for this sample with the deterministic offline plan."
+          : model === "gemini" && scopeKey !== "__demo__"
           ? "Gemini receives Windows check categories and severities to prioritize the selected findings."
           : "Prioritize findings and review each recommendation against the source assessment."}
       </p>
@@ -175,9 +178,9 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
                 onChange={(event) => handleModelChange(event.target.value as "lm_studio" | "offline" | "gemini")}
                 disabled={analyze.busy}
               >
-                <option value="lm_studio">Local model (LM Studio)</option>
+                {!hostedDemo && <option value="lm_studio">Local model (LM Studio)</option>}
                 <option value="offline">Offline rules (deterministic)</option>
-                <option value="gemini">Gemini 3.5 Flash-Lite (Google Cloud)</option>
+                <option value="gemini">{hostedDemo ? "Gemini (recorded sample)" : "Gemini 3.5 Flash-Lite (Google Cloud)"}</option>
               </select>
             </Field>
 

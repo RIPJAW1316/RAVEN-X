@@ -35,6 +35,7 @@ import { Empty, ErrorState, SelectionHighlight, Toast } from "../components/ui";
 import { useApi } from "../hooks/useApi";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { buildHref, useRoute } from "../hooks/useRoute";
+import { hostedDemo } from "../lib/hostedDemo";
 import { Activity as ActivityPage } from "../features/Activity";
 import { Assessments } from "../features/Assessments";
 import { CommandCenter } from "../features/CommandCenter";
@@ -61,7 +62,7 @@ interface NavGroup {
   items: NavItem[];
 }
 
-const NAVIGATION: NavGroup[] = [
+const WORKSPACE_NAVIGATION: NavGroup[] = [
   { label: "", items: [{ id: "command", label: "Command Center", icon: LayoutDashboard }] },
   {
     label: "Operations",
@@ -94,6 +95,12 @@ const NAVIGATION: NavGroup[] = [
   },
 ];
 
+const demoScreens = new Set(["command", "fleet", "assessments", "findings", "activity", "analyst", "reports"]);
+const NAVIGATION = hostedDemo
+  ? WORKSPACE_NAVIGATION.map((group) => ({
+      ...group, items: group.items.filter((item) => demoScreens.has(item.id)),
+    })).filter((group) => group.items.length)
+  : WORKSPACE_NAVIGATION;
 const ALL_ITEMS = NAVIGATION.flatMap((group) => group.items);
 const ORG_KEY = "ravenx.organization";
 
@@ -102,7 +109,7 @@ export function App() {
 
   useEffect(() => session.subscribe((token) => setAuthenticated(Boolean(token))), []);
 
-  if (!authenticated) return <Login onSuccess={() => setAuthenticated(true)} />;
+  if (!hostedDemo && !authenticated) return <Login onSuccess={() => setAuthenticated(true)} />;
   return <Workspace onSignOut={() => setAuthenticated(false)} />;
 }
 
@@ -274,6 +281,11 @@ function Workspace({ onSignOut }: { onSignOut: () => void }) {
             exit={reduced ? undefined : { opacity: 0, y: -6 }}
             transition={{ duration: 0.18 }}
           >
+            {hostedDemo && (
+              <p className="panel-note">
+                Buildathon prototype · Synthetic Windows evidence. Explore the assessment, AI Analyst, and PDF report.
+              </p>
+            )}
             {organizations.error ? (
               <ErrorState error={organizations.error} onRetry={organizations.reload} />
             ) : organizations.loading && !organizations.data ? (
@@ -467,9 +479,9 @@ function Topbar({
         <kbd>Ctrl K</kbd>
       </button>
       <div className="topbar-right">
-        <button type="button" className="icon-button" onClick={onSignOut} aria-label="Sign out">
+        {!hostedDemo && <button type="button" className="icon-button" onClick={onSignOut} aria-label="Sign out">
           <LogOut size={16} />
-        </button>
+        </button>}
       </div>
     </header>
   );

@@ -4,6 +4,7 @@ import { insights } from "../api/endpoints";
 import { AsyncSection, Badge, Empty, ErrorState, Field, Panel, SeverityBadge, Stat } from "../components/ui";
 import { useApi, useMutation } from "../hooks/useApi";
 import { normalizeSeverity } from "../lib/domain";
+import { hostedDemo } from "../lib/hostedDemo";
 import { formatDateTime, titleCase } from "../lib/format";
 import { scannerName } from "../lib/scanners";
 import type { FleetEvidenceReport, ReportReviewModel, ReviewedEvidenceReport } from "../types/api";
@@ -14,7 +15,7 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
 }) {
   const report = useApi((signal) => endpointId ? insights.endpointReport(organizationId, endpointId, signal)
     : insights.fleetReport(organizationId, signal), [organizationId, endpointId]);
-  const [model, setModel] = useState<ReportReviewModel>("lm_studio");
+  const [model, setModel] = useState<ReportReviewModel>(hostedDemo ? "gemini" : "lm_studio");
   const [reviewed, setReviewed] = useState<ReviewedEvidenceReport | null>(null);
   const review = useMutation(async () => {
     setReviewed(null);
@@ -54,8 +55,8 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
               clearReview();
               setModel(event.target.value as ReportReviewModel);
             }}>
-              <option value="lm_studio">Local model (LM Studio)</option>
-              <option value="gemini">Gemini (Google Cloud)</option>
+              {!hostedDemo && <option value="lm_studio">Local model (LM Studio)</option>}
+              <option value="gemini">{hostedDemo ? "Gemini (recorded sample)" : "Gemini (Google Cloud)"}</option>
             </select>
           </Field>
           <button type="button" className="primary" disabled={busy || report.loading} onClick={() => review.run()}>
@@ -67,7 +68,9 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
           <button type="button" className="ghost" disabled={!reviewed || busy} onClick={() => window.print()}>
             <Printer size={14} /> Print review
           </button>
-          {model === "gemini" && <p className="panel-note">Gemini receives check categories and severities to prioritize findings.</p>}
+          {model === "gemini" && <p className="panel-note">{hostedDemo
+            ? "The report uses the recorded analysis of this synthetic assessment."
+            : "Gemini receives check categories and severities to prioritize findings."}</p>}
         </div>
         {review.error && <ErrorState error={review.error} />}
         {pdf.error && <ErrorState error={pdf.error} />}

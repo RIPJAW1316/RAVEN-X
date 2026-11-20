@@ -46,6 +46,7 @@ import {
 } from "../lib/domain";
 import { DASH, formatDateTime, formatDuration, formatRelative, shortId } from "../lib/format";
 import { DEFAULT_SCANNER_IDS, scannerName } from "../lib/scanners";
+import { hostedDemo } from "../lib/hostedDemo";
 import type { Assessment, AssessmentState, FindingDetail, ScannerResultSummary } from "../types/api";
 import { ScannerPicker } from "./Fleet";
 import { AnalystPanel } from "./Analyst";
@@ -131,9 +132,9 @@ function AssessmentList({
             <button type="button" className="ghost" onClick={list.reload}>
               <RefreshCw size={15} aria-hidden="true" /> Refresh
             </button>
-            <button type="button" className="primary" onClick={() => setComposerOpen(true)}>
+            {!hostedDemo && <button type="button" className="primary" onClick={() => setComposerOpen(true)}>
               <Plus size={15} aria-hidden="true" /> New assessment
-            </button>
+            </button>}
           </>
         }
       />
@@ -166,7 +167,7 @@ function AssessmentList({
                     : "No assessments currently match this filter."
                 }
                 action={
-                  filter === "all" ? (
+                  filter === "all" && !hostedDemo ? (
                     <button type="button" className="primary" onClick={() => setComposerOpen(true)}>
                       <Plus size={15} aria-hidden="true" /> New assessment
                     </button>
