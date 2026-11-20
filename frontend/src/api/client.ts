@@ -151,7 +151,9 @@ export async function requestBlob(
 ): Promise<{ blob: Blob; filename: string | null }> {
   const headers = new Headers();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(buildUrl(path, options.query), { headers, signal: options.signal });
+  const response = await fetch(buildUrl(path, options.query), {
+    method: options.method ?? "GET", headers, signal: options.signal,
+  });
   if (response.status === 401) session.set(null);
   if (!response.ok) throw await parseError(response);
   const disposition = response.headers.get("Content-Disposition");

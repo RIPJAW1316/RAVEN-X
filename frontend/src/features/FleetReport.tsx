@@ -1,10 +1,12 @@
-import { Download, FileText, Printer, RefreshCw } from "lucide-react";
+import { Download, FileText, Printer, RefreshCw, Sparkles } from "lucide-react";
+import { useState } from "react";
 import { insights } from "../api/endpoints";
-import { AsyncSection, Badge, Empty, ErrorState, Panel, SeverityBadge, Stat } from "../components/ui";
+import { AsyncSection, Badge, Empty, ErrorState, Field, Panel, SeverityBadge, Stat } from "../components/ui";
 import { useApi, useMutation } from "../hooks/useApi";
 import { normalizeSeverity } from "../lib/domain";
 import { formatDateTime, titleCase } from "../lib/format";
-import type { FleetEvidenceReport } from "../types/api";
+import { scannerName } from "../lib/scanners";
+import type { FleetEvidenceReport, ReportReviewModel, ReviewedEvidenceReport } from "../types/api";
 
 export function FleetReport({ organizationId, endpointId, navigate }: {
   organizationId: string; endpointId?: string;
@@ -12,19 +14,31 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
 }) {
   const report = useApi((signal) => endpointId ? insights.endpointReport(organizationId, endpointId, signal)
     : insights.fleetReport(organizationId, signal), [organizationId, endpointId]);
+  const [model, setModel] = useState<ReportReviewModel>("lm_studio");
+  const [reviewed, setReviewed] = useState<ReviewedEvidenceReport | null>(null);
+  const review = useMutation(async () => {
+    setReviewed(null);
+    setReviewed(await insights.reviewReport(organizationId, model, endpointId));
+  });
   const csv = useMutation(async () => {
     const result = await insights.fleetCsv(organizationId);
     downloadBlob(result.blob, "ravenx-fleet-report.csv");
     return true;
   });
   const pdf = useMutation(async () => {
-    const result = await insights.fleetPdf(organizationId, endpointId);
-    downloadBlob(result.blob, result.filename ?? `ravenx-${endpointId ? "machine" : "fleet"}-report.pdf`);
+    const result = await insights.reviewedPdf(organizationId, model, endpointId);
+    downloadBlob(result.blob, result.filename ?? `ravenx-${endpointId ? "machine" : "fleet"}-reviewed-report.pdf`);
     return true;
   });
+  const busy = review.busy || pdf.busy;
+  const clearReview = () => {
+    setReviewed(null);
+    review.reset();
+    pdf.reset();
+  };
   return <Panel className="print-report" title={endpointId ? "Machine evidence report" : "Consolidated fleet report"} icon={<FileText size={15} />}
-    actions={<button type="button" className="ghost small" onClick={report.reload}><RefreshCw size={14} /> Refresh</button>}>
-    <AsyncSection loading={report.loading} error={report.error} data={report.data} onRetry={report.reload}>
+    actions={<button type="button" className="ghost small" disabled={busy} onClick={() => { clearReview(); report.reload(); }}><RefreshCw size={14} /> Refresh</button>}>
+    <AsyncSection loading={report.loading} error={report.error} data={reviewed?.report ?? report.data} onRetry={report.reload}>
       {(data) => <>
         <header className="print-heading"><span>RAVEN-X</span><h1>{endpointId ? data.endpoints[0]?.hostname ?? "Machine report" : "Fleet report"}</h1></header>
         <p className="panel-note">Generated {formatDateTime(data.generated_at)} · latest known assessment attempt per machine. {data.advisory_note}</p>
@@ -34,14 +48,35 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
           <Stat label="Not fully scanned" value={data.summary.not_scanned + data.summary.partial} hint={`${data.summary.partial} partial · ${data.summary.failed} failed · ${data.summary.pending + data.summary.running} in progress`} tone={data.summary.not_scanned + data.summary.partial ? "warn" : "neutral"} />
           <Stat label="Findings" value={data.summary.findings_from_completed_scans} hint="From completed scans in this report" />
         </section>
+        <div className="report-review-controls">
+          <Field label="Review model">
+            <select value={model} disabled={busy} onChange={(event) => {
+              clearReview();
+              setModel(event.target.value as ReportReviewModel);
+            }}>
+              <option value="lm_studio">Local model (LM Studio)</option>
+              <option value="gemini">Gemini (Google Cloud)</option>
+            </select>
+          </Field>
+          <button type="button" className="primary" disabled={busy || report.loading} onClick={() => review.run()}>
+            <Sparkles size={15} /> {review.busy ? "Reviewing evidence…" : "Review evidence"}
+          </button>
+          <button type="button" className="ghost" disabled={busy || report.loading} onClick={() => pdf.run()}>
+            <Download size={14} /> {pdf.busy ? "Reviewing and preparing PDF…" : "Download PDF"}
+          </button>
+          <button type="button" className="ghost" disabled={!reviewed || busy} onClick={() => window.print()}>
+            <Printer size={14} /> Print review
+          </button>
+          {model === "gemini" && <p className="panel-note">Gemini receives check categories and severities to prioritize findings.</p>}
+        </div>
+        {review.error && <ErrorState error={review.error} />}
+        {pdf.error && <ErrorState error={pdf.error} />}
+        {reviewed && <ReportReview review={reviewed.review} navigate={navigate} />}
         <div className="page-actions report-actions">
-          <button type="button" className="ghost" onClick={() => downloadReport(data)}><Download size={14} /> Export JSON</button>
+          <button type="button" className="ghost" onClick={() => downloadReport(data)}><Download size={14} /> Export evidence JSON</button>
           {!endpointId && <button type="button" className="ghost" disabled={csv.busy} onClick={() => csv.run()}><Download size={14} /> Export CSV</button>}
-          <button type="button" className="ghost" disabled={pdf.busy} onClick={() => pdf.run()}><Download size={14} /> {pdf.busy ? "Preparing PDF…" : "Download PDF"}</button>
-          <button type="button" className="ghost" onClick={() => window.print()}><Printer size={14} /> Print / PDF</button>
         </div>
         {csv.error && <ErrorState error={csv.error} />}
-        {pdf.error && <ErrorState error={pdf.error} />}
         {data.endpoints.length === 0 ? <Empty title="No machines registered" detail="Enroll and approve a Windows agent to begin collecting evidence." /> :
           <div className="table-scroll"><table className="data-table"><thead><tr><th>Machine</th><th>Trust / presence</th><th>Assessment coverage</th><th>Last attempt</th><th>Findings</th></tr></thead>
             <tbody>{data.endpoints.map((row) => <tr key={row.endpoint_id}>
@@ -72,6 +107,48 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
       </>}
     </AsyncSection>
   </Panel>;
+}
+
+function ReportReview({ review, navigate }: {
+  review: ReviewedEvidenceReport["review"];
+  navigate: (section: string, ...params: string[]) => void;
+}) {
+  const provider = review.provider === "lm_studio" ? "LM Studio"
+    : review.provider === "google_cloud" ? "Google Gemini"
+    : review.provider === "offline" ? "Offline rules" : "Analysis unavailable";
+  const ai = review.provider === "lm_studio" || review.provider === "google_cloud";
+
+  return <section className="report-review" aria-labelledby="report-review-title">
+    <div className="report-review-heading">
+      <h3 id="report-review-title">Assessment review</h3>
+      <Badge tone={ai ? "info" : "warn"}>{provider}</Badge>
+    </div>
+    <p className="panel-note">{ai && review.model && <>{review.model} · </>}{review.note}</p>
+    {review.priorities.length > 0 && <>
+      <h4>Priority findings <small>{review.priorities.length} of {review.finding_count}</small></h4>
+      <ol className="report-priorities">
+        {review.priorities.map((item) => <li key={item.finding_key}>
+          <div><SeverityBadge severity={normalizeSeverity(item.severity)} /> <strong>{item.title}</strong></div>
+          <p>{item.action}</p>
+          <small className="block">{item.rationale}</small>
+          <button type="button" className="link" onClick={() => navigate("assessments", item.assessment_id)}>
+            {item.hostname} · Source assessment
+          </button>
+        </li>)}
+      </ol>
+    </>}
+    {review.unverified.length > 0 && <>
+      <h4>Unverified checks <small>{review.unverified.length} of {review.unverified_count}</small></h4>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead><tr><th scope="col">Machine</th><th scope="col">Check</th><th scope="col">Reason</th></tr></thead>
+          <tbody>{review.unverified.map((item) => <tr key={item.endpoint_id + "/" + item.scanner_id}>
+            <td>{item.hostname}</td><td>{scannerName(item.scanner_id)}</td><td>{item.reason}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </>}
+  </section>;
 }
 
 function downloadReport(data: FleetEvidenceReport) {

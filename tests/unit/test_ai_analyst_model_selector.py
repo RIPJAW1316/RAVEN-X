@@ -365,6 +365,7 @@ def test_gemini_on_fleet_scope_without_demo_id_fails_closed():
     )
     assert resp.status_code == 422
     assert resp.json()["detail"]["code"] == "INVALID_REQUEST"
+    assert "Allow Gemini on live assessments" in resp.json()["detail"]["message"]
 
 
 

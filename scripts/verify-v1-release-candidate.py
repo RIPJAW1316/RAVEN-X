@@ -70,6 +70,46 @@ def verify_bindings(stage: Path, source_commit: str) -> None:
 
 
 def smoke_admin(root: Path, runtime: Path) -> None:
+    # Exercise the compiled WinForms controls and the options passed to the bundled pilot.
+    launcher_check = r"""
+$ErrorActionPreference = 'Stop'
+$exe = [Reflection.Assembly]::LoadFrom((Resolve-Path '.\RAVEN-X-Server.exe').Path)
+$pilot = Get-Command '.\scripts\pilot\Start-Omen-College-Pilot.ps1'
+$factory = $exe.GetType('Launcher').GetMethod('PilotStartInfo', 'Static,NonPublic')
+$form = [Activator]::CreateInstance($exe.GetType('LauncherForm'), 'Instance,NonPublic', $null,
+                                    [object[]]@((Get-Location).Path), $null)
+try {
+    $type = $form.GetType()
+    $cloud = $type.GetField('gemini','Instance,NonPublic').GetValue($form)
+    $live = $type.GetField('liveGemini','Instance,NonPublic').GetValue($form)
+    $local = $type.GetField('ai','Instance,NonPublic').GetValue($form)
+    $model = $type.GetField('localModel','Instance,NonPublic').GetValue($form)
+    if ($live.Enabled -or $model.Enabled) { throw 'Provider options must initially be off' }
+    $local.Checked = $true
+    $cloud.Checked = $true
+    if (!$live.Enabled -or !$model.Enabled -or $model.Text -ne 'google/gemma-3-4b') { throw 'Provider controls unavailable' }
+    foreach ($useCloud in @($false, $true)) {
+        foreach ($allowLive in @($false, $true)) {
+            $argList = [object[]]@((Get-Location).Path, 'qa', '127.0.0.1', 18443,
+                                    $false, $true, $model.Text, $useCloud, $allowLive, $null)
+            $argsLine = $factory.Invoke($null, $argList).Arguments
+            if (($argsLine.Contains(' -EnableGeminiLive') -ne ($useCloud -and $allowLive)) -or
+                ($argsLine.Contains(' -EnableGeminiDemo') -ne ($useCloud -and !$allowLive)) -or
+                !$argsLine.Contains(' -AiModelId google/gemma-3-4b') -or !$argsLine.Contains(' -ReleasePackage')) {
+                throw 'Incorrect provider arguments in release launcher'
+            }
+        }
+    }
+    $live.Checked = $true
+    $cloud.Checked = $false
+    if ($live.Checked -or $live.Enabled -or !$pilot.Parameters.ContainsKey('EnableGeminiLive')) {
+        throw 'Live Gemini scope did not reset or the pilot switch is missing'
+    }
+} finally { $form.Dispose() }
+"""
+    run(POWERSHELL, "-NoProfile", "-STA", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command", launcher_check, cwd=root)
+    print("Packaged launcher passed local, cloud, demo and live provider selection checks.")
     python_zip = root / "runtime" / BUILD.PYTHON_ARCHIVE
     if BUILD.sha256_file(python_zip) != BUILD.PYTHON_SHA256:
         raise ValueError("Bundled CPython hash differs from the trusted archive")

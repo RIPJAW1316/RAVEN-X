@@ -1,4 +1,4 @@
-"""Bounded facts for optional local LLM and cloud demo interpretation of stored evidence."""
+"""Bounded advisory analysis and report review for stored assessment evidence."""
 
 from datetime import datetime, timezone
 import json
@@ -16,6 +16,10 @@ from .synthetic_demo import (
 )
 
 
+class LiveGeminiDisabled(ValueError):
+    """The operator has not enabled cloud prioritization for real assessments."""
+
+
 class TenantLocalAnalysisService:
     def __init__(self, report_service, authorizer, provider, *, cloud_provider=None, clock=None,
                  max_prompt_chars=12000, max_finding_facts=30):
@@ -31,9 +35,6 @@ class TenantLocalAnalysisService:
 
     def analyze(self, principal, context, *, endpoint_id=None, assessment_ids=None,
                 demo_id=None, model=None, offline_plan: bool = False):
-        if principal.principal_type is not PrincipalType.HUMAN or not isinstance(context, OrganizationContext):
-            raise PermissionError("human organization context required")
-
         allowed_models = {"lm_studio", "offline", "gemini"}
         if model is not None and model not in allowed_models:
             raise ValueError(f"unsupported AI model: {model}")
@@ -44,7 +45,63 @@ class TenantLocalAnalysisService:
             if demo_id != WINDOWS_HARDENING_DEMO_ID:
                 raise ValueError(f"unsupported demo_id: {demo_id}")
 
-        # Enforce human membership, ai.use and reports.read on both real and demo requests
+        self._authorize(principal, context)
+
+        if model == "gemini" and demo_id is None and not getattr(self.cloud_provider, "live_enabled", False):
+            raise LiveGeminiDisabled("Live Gemini analysis is disabled")
+
+        if demo_id == WINDOWS_HARDENING_DEMO_ID:
+            report = build_synthetic_windows_demo_report()
+            source = get_demo_source_descriptor(demo_id)
+        else:
+            report = self.reports.build(principal, context, endpoint_id=endpoint_id,
+                                        assessment_ids=assessment_ids)
+            source = self._report_source(report)
+        return self._analyze_report(report, source, demo_id=demo_id, model=model, offline_plan=offline_plan)
+
+    def review_report(self, principal, context, *, endpoint_id=None, model="lm_studio"):
+        """Build and review a single, tenant-scoped snapshot for report exports."""
+        self._authorize(principal, context)
+        if model not in {"lm_studio", "gemini"}:
+            raise ValueError("unsupported report review model")
+
+        report = self.reports.build(principal, context, endpoint_id=endpoint_id)
+        disabled = model == "gemini" and not getattr(self.cloud_provider, "live_enabled", False)
+        result = self._analyze_report(
+            report, self._report_source(report), model="offline" if disabled else model,
+        )
+        priorities = result.get("plan", [])
+        unverified = result.get("blind_spots", [])
+        if result["status"] == "unavailable":
+            note = "This scope has no completed assessment evidence to review."
+        elif disabled:
+            note = "Live Gemini review is disabled. The report uses offline rules."
+        elif result.get("fallback_used"):
+            note = result["fallback_reason"] or "The model could not complete the review. The report uses offline rules."
+        elif not priorities:
+            note = "The collected evidence has no findings to prioritize."
+        else:
+            note = "Review these priorities against the source assessment before making changes."
+        return {
+            "report": report,
+            "review": {
+                "status": result["status"],
+                "model": result.get("model"),
+                "provider": result.get("provider"),
+                "note": note,
+                "finding_count": len(priorities),
+                "priorities": [{key: row[key] for key in (
+                    "finding_key", "title", "severity", "hostname", "assessment_id", "action", "rationale",
+                )} for row in priorities[:12]],
+                "unverified_count": len(unverified),
+                "unverified": unverified[:12],
+            },
+        }
+
+    def _authorize(self, principal, context):
+        if principal.principal_type is not PrincipalType.HUMAN or not isinstance(context, OrganizationContext):
+            raise PermissionError("human organization context required")
+
         decision = self.authorizer.authorize(AuthorizationRequest(
             principal, AuthorizationAction.AI_USE,
             AuthorizationResource("local_ai_analysis", metadata={"organization_id": str(context.organization_id)}),
@@ -59,25 +116,20 @@ class TenantLocalAnalysisService:
         if not read_decision.allowed:
             raise PermissionError(read_decision.reason_code)
 
-        if model == "gemini" and demo_id is None and not getattr(self.cloud_provider, "live_enabled", False):
-            raise ValueError("Live Gemini analysis is disabled")
+    @staticmethod
+    def _report_source(report):
+        return {
+            "organization_id": report["organization_id"],
+            "assessment_ids": [row["latest_assessment"]["assessment_id"] for row in report["endpoints"]
+                               if row["latest_assessment"] is not None],
+            "endpoint_ids": [row["endpoint_id"] for row in report["endpoints"]],
+            "report_generated_at": report["generated_at"],
+        }
 
-        if demo_id == WINDOWS_HARDENING_DEMO_ID:
-            report = build_synthetic_windows_demo_report()
-            source = get_demo_source_descriptor(demo_id)
-        else:
-            report = self.reports.build(principal, context, endpoint_id=endpoint_id,
-                                        assessment_ids=assessment_ids)
-            source = {
-                "organization_id": report["organization_id"],
-                "assessment_ids": [row["latest_assessment"]["assessment_id"] for row in report["endpoints"]
-                                   if row["latest_assessment"] is not None],
-                "endpoint_ids": [row["endpoint_id"] for row in report["endpoints"]],
-                "report_generated_at": report["generated_at"],
-            }
-            if report["summary"]["scanned"] + report["summary"]["partial"] == 0:
-                return {"status": "unavailable", "reason_code": "NO_COMPLETED_EVIDENCE",
-                        "advisory": True, "analysis": None, "source": source}
+    def _analyze_report(self, report, source, *, demo_id=None, model=None, offline_plan=False):
+        if demo_id is None and report["summary"]["scanned"] + report["summary"]["partial"] == 0:
+            return {"status": "unavailable", "reason_code": "NO_COMPLETED_EVIDENCE",
+                    "advisory": True, "analysis": None, "source": source}
 
         if model == "offline":
             return self._offline_fix_plan(report, source)

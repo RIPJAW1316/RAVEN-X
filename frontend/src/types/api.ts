@@ -209,6 +209,22 @@ export interface LocalAnalysis {
   coverage?: { scanned_endpoints: number; included_endpoints: number; included_findings: number; truncated: boolean };
 }
 
+export type ReportReviewModel = "lm_studio" | "gemini";
+
+export interface ReviewedEvidenceReport {
+  report: FleetEvidenceReport;
+  review: {
+    status: "available" | "unavailable";
+    model: string | null;
+    provider: "lm_studio" | "google_cloud" | "offline" | null;
+    note: string;
+    finding_count: number;
+    priorities: Pick<FixPlanItem, "finding_key" | "title" | "severity" | "hostname" | "assessment_id" | "action" | "rationale">[];
+    unverified_count: number;
+    unverified: FixPlan["unverified_checks"];
+  };
+}
+
 export interface EndpointPresence {
   endpoint_id: string;
   organization_id: string | null;

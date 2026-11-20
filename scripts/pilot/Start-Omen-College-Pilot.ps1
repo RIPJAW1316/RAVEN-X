@@ -11,6 +11,7 @@ param(
     [switch]$DisableLocalAi,
     [string]$AiModelId = 'meta-llama-3.1-8b-instruct',
     [switch]$EnableGeminiDemo,
+    [switch]$EnableGeminiLive,
     [switch]$ReleasePackage,
     [switch]$LoopbackOnly,
     [switch]$ManagedByLauncher,
@@ -40,8 +41,10 @@ if ($LoopbackOnly) {
         -not ($bytes[0] -eq 192 -and $bytes[1] -eq 168)) { throw 'Select a private LAN IPv4 address.' }
     $assigned = @(Get-NetIPAddress -IPAddress $LabAddress -AddressFamily IPv4 -ErrorAction Stop)
     if ($assigned.Count -ne 1) { throw 'Address is not assigned to exactly one Omen interface.' }
-    $profile = Get-NetConnectionProfile -InterfaceIndex $assigned[0].InterfaceIndex -ErrorAction Stop
-    if ($profile.NetworkCategory -ne 'Private') { throw 'The pilot LAN must be a Private Windows network.' }
+    $profile = Get-NetConnectionProfile -InterfaceIndex $assigned[0].InterfaceIndex -ErrorAction SilentlyContinue
+    if ($null -eq $profile -or $profile.NetworkCategory -ne 'Private') {
+        throw "Select an adapter with a Private Windows network profile. $LabAddress has no Private profile."
+    }
     $listeners += $LabAddress
 }
 if (@(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0) {
@@ -62,15 +65,19 @@ try {
     Push-Location $root
     $locationPushed = $true
     $python = Get-RavenXServerPython -Root $root -ReleasePackage:$ReleasePackage
-    if ($EnableGeminiDemo) {
+    if ($EnableGeminiDemo -or $EnableGeminiLive) {
         $credential = & $python -B -E -s -m backend.cli gemini-key status
         if ($LASTEXITCODE -ne 0 -or -not (($credential | ConvertFrom-Json).configured)) {
-            throw 'Set the Gemini key under this Windows account before enabling Gemini demo.'
+            throw 'Use Set Gemini key under this Windows account before enabling the Gemini API.'
         }
         $env:RAVENX_CLOUD_GEMINI_ENABLED = 'true'
         $env:RAVENX_CLOUD_GEMINI_AUTH_MODE = 'api_key'
+        $env:RAVENX_CLOUD_GEMINI_LIVE_ENABLED = if ($EnableGeminiLive) { 'true' } else { 'false' }
+        if ($EnableGeminiLive) { Write-Host 'Gemini API enabled for live assessment priorities and the demo.' }
+        else { Write-Host 'Gemini API enabled for the bundled demo only.' }
     } elseif ($ManagedByLauncher -or $ReleasePackage) {
         $env:RAVENX_CLOUD_GEMINI_ENABLED = 'false'
+        $env:RAVENX_CLOUD_GEMINI_LIVE_ENABLED = 'false'
     }
     if ($EnableLocalAi -and -not $DisableLocalAi) {
         $baseUrl = 'http://127.0.0.1:1234/v1'

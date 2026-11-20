@@ -1,6 +1,6 @@
 /**
  * Current machine/fleet evidence reports and historical compliance snapshots.
- * JSON/CSV exports contain stored facts; Print/PDF uses the browser print flow.
+ * JSON and CSV preserve stored evidence. The reviewed report supports PDF and printing.
  */
 import { Download, FileText } from "lucide-react";
 import { useMemo, useState } from "react";

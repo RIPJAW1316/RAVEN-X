@@ -27,6 +27,8 @@ import type {
   FleetPage,
   FleetEvidenceReport,
   LocalAnalysis,
+  ReportReviewModel,
+  ReviewedEvidenceReport,
   FleetQueryParams,
   FleetScope,
   Membership,
@@ -50,9 +52,14 @@ export const insights = {
       { signal },
     ),
   fleetCsv: (id: string) => requestBlob(`${org(id)}/reports/fleet.csv`),
-  fleetPdf: (id: string, endpointId?: string) => requestBlob(endpointId
-    ? `${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report.pdf`
-    : `${org(id)}/reports/fleet.pdf`),
+  reviewReport: (id: string, model: ReportReviewModel, endpointId?: string) =>
+    request<ReviewedEvidenceReport>(org(id) + "/reports/review", {
+      method: "POST", query: { model, endpoint_id: endpointId },
+    }),
+  reviewedPdf: (id: string, model: ReportReviewModel, endpointId?: string) =>
+    requestBlob(org(id) + "/reports/review", {
+      method: "POST", query: { model, endpoint_id: endpointId, format: "pdf" },
+    }),
   fleetReport: (id: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/reports/fleet`, { signal }),
   endpointReport: (id: string, endpointId: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report`, { signal }),
   analyze: (

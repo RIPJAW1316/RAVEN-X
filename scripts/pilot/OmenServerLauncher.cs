@@ -94,16 +94,18 @@ internal static class Launcher
     }
 
     internal static ProcessStartInfo PilotStartInfo(string root, string pilot, string address, int port,
-        bool lan, bool ai, bool gemini, string email)
+        bool lan, bool ai, string localModel, bool gemini, bool liveGemini, string email)
     {
+        if (ai && !Regex.IsMatch(localModel ?? "", @"\A[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\z"))
+            throw new ArgumentException("Enter the model identifier shown in LM Studio.");
         string script = Path.Combine(root, "scripts", "pilot", "Start-Omen-College-Pilot.ps1");
         var info = new ProcessStartInfo
         {
             FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
             Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script +
                 "\" -ManagedByLauncher -PilotName " + pilot + " -LabAddress " + address + " -Port " + port +
-                (lan ? "" : " -LoopbackOnly") + (ai ? "" : " -DisableLocalAi") +
-                (gemini ? " -EnableGeminiDemo" : "") + ReleaseSwitch() +
+                (lan ? "" : " -LoopbackOnly") + (ai ? " -AiModelId " + localModel : " -DisableLocalAi") +
+                (gemini ? (liveGemini ? " -EnableGeminiLive" : " -EnableGeminiDemo") : "") + ReleaseSwitch() +
                 (email == null ? "" : " -AdministratorEmail \"" + email + "\""),
             WorkingDirectory = root,
             UseShellExecute = false,
@@ -149,7 +151,9 @@ internal sealed class LauncherForm : Form
     private readonly NumericUpDown port = new NumericUpDown { Minimum = 1024, Maximum = 65535, Value = 8443, Width = 105 };
     private readonly CheckBox lan = new CheckBox { Text = "Allow LAN clients", AutoSize = true, Checked = true };
     private readonly CheckBox ai = new CheckBox { Text = "Enable local AI (LM Studio)", AutoSize = true };
-    private readonly CheckBox gemini = new CheckBox { Text = "Enable Gemini demo", AutoSize = true };
+    private readonly ComboBox localModel = new ComboBox { Width = 225, MaxLength = 128, AccessibleName = "LM Studio model ID" };
+    private readonly CheckBox gemini = new CheckBox { Text = "Enable Gemini API", AutoSize = true };
+    private readonly CheckBox liveGemini = new CheckBox { Text = "Allow Gemini on live assessments", AutoSize = true };
     private readonly Label status = new Label { AutoSize = true, Text = "Stopped", Margin = new Padding(12, 8, 0, 0) };
     private readonly Button start = ButtonFor("Start server");
     private readonly Button stop = ButtonFor("Stop server");
@@ -194,12 +198,18 @@ internal sealed class LauncherForm : Form
         setup.Controls.Add(profile, 0, 1);
         setup.Controls.Add(address, 1, 1);
         setup.Controls.Add(port, 2, 1);
-        var options = Row(lan, ai, gemini, refresh);
+        localModel.Items.AddRange(new object[] { "google/gemma-3-4b", "meta-llama-3.1-8b-instruct" });
+        localModel.SelectedIndex = 0;
+        var options = Row(lan, refresh);
+        var localOptions = Row(ai, localModel);
+        var cloudOptions = Row(gemini, liveGemini);
         var actions = Row(start, stop, geminiKey, status);
         var links = Row(portal, enrollment, fleet, copy, saveCa);
         layout.Controls.Add(title);
         layout.Controls.Add(setup);
         layout.Controls.Add(options);
+        layout.Controls.Add(localOptions);
+        layout.Controls.Add(cloudOptions);
         layout.Controls.Add(actions);
         layout.Controls.Add(Caption("Client connection"));
         connection.Height = 82;
@@ -208,7 +218,7 @@ internal sealed class LauncherForm : Form
         layout.Controls.Add(links);
         layout.Controls.Add(Caption("Server log"));
         layout.Controls.Add(log);
-        for (int row = 0; row < 8; row++) layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (int row = 0; row < 10; row++) layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         if (Directory.Exists(DataRoot))
@@ -222,6 +232,11 @@ internal sealed class LauncherForm : Form
         refresh.Click += delegate { RefreshAddresses(); };
         geminiKey.Click += delegate { RunUi(() => Launcher.OpenGeminiKeyPrompt(workspace)); };
         lan.CheckedChanged += delegate { UpdateControls(); };
+        ai.CheckedChanged += delegate { UpdateControls(); };
+        gemini.CheckedChanged += delegate {
+            if (!gemini.Checked) liveGemini.Checked = false;
+            UpdateControls();
+        };
         start.Click += delegate { StartPilot(); };
         stop.Click += delegate { StopPilot(); };
         portal.Click += delegate { OpenPortal("/"); };
@@ -296,7 +311,7 @@ internal sealed class LauncherForm : Form
             sha = null;
             status.Text = "Starting…";
             var child = new Process { StartInfo = Launcher.PilotStartInfo(workspace, name, host, (int)port.Value,
-                lan.Checked, ai.Checked, gemini.Checked, email), EnableRaisingEvents = true };
+                lan.Checked, ai.Checked, localModel.Text.Trim(), gemini.Checked, liveGemini.Checked, email), EnableRaisingEvents = true };
             child.OutputDataReceived += (sender, e) => ShowLine(child, e.Data, true);
             child.ErrorDataReceived += (sender, e) => ShowLine(child, e.Data, false);
             child.Exited += (sender, e) =>
@@ -393,6 +408,8 @@ internal sealed class LauncherForm : Form
         bool connected = !stopping && status.Text == "Running" && url != null && caPath != null && sha != null;
         start.Enabled = profile.Enabled = port.Enabled = lan.Enabled = ai.Enabled = gemini.Enabled = idle;
         address.Enabled = refresh.Enabled = idle && lan.Checked;
+        localModel.Enabled = idle && ai.Checked;
+        liveGemini.Enabled = idle && gemini.Checked;
         stop.Enabled = !idle && !stopping;
         portal.Enabled = fleet.Enabled = enrollment.Enabled = copy.Enabled = saveCa.Enabled = connected;
         string text = connected ? "HTTPS URL: " + url + "\r\nPublic CA SHA-256: " + sha + "\r\nCA file: " + caPath :

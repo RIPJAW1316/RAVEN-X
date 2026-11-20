@@ -7,17 +7,22 @@ from xml.sax.saxutils import escape
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
+from reportlab.platypus import KeepTogether, LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
 
 
-def render_fleet_pdf(report):
+def render_fleet_pdf(report, *, review=None):
     output = BytesIO()
     title = "Machine evidence report" if report["scope"]["kind"] == "endpoint" else "Fleet evidence report"
+    if review is not None:
+        title = "Reviewed machine report" if report["scope"]["kind"] == "endpoint" else "Reviewed fleet report"
     document = SimpleDocTemplate(output, pagesize=A4, topMargin=43, bottomMargin=45,
                                  leftMargin=40, rightMargin=40, title=title, author="RAVEN-X")
     styles = getSampleStyleSheet()
     styles["Title"].alignment = 0
     styles["Normal"].spaceAfter = 5
+    styles["Title"].textColor = colors.HexColor("#10272e")
+    styles["Heading2"].textColor = colors.HexColor("#205760")
+    styles["Heading3"].textColor = colors.HexColor("#18363d")
 
     def paragraph(value, style="Normal"):
         text = "Unavailable" if value is None else str(value)
@@ -67,8 +72,36 @@ def render_fleet_pdf(report):
               [(summary["total_enrolled"], summary["scanned"], summary["partial"],
                 summary["not_scanned"], summary["findings_from_completed_scans"])],
               (.17, .18, .14, .29, .22)),
-        paragraph("Machines", "Heading2"),
     ]
+    if review is not None:
+        story.append(paragraph("Assessment review", "Heading2"))
+        provider = {
+            "lm_studio": "AI-assisted priorities via LM Studio",
+            "google_cloud": "AI-assisted priorities via Google Gemini",
+            "offline": "Prioritization by offline rules",
+        }.get(review["provider"], "Analysis unavailable")
+        if review["provider"] in {"lm_studio", "google_cloud"} and review["model"]:
+            provider = f"{provider} ({review['model']})"
+        story.extend([paragraph(provider, "Heading4"), paragraph(review["note"])])
+        if review["priorities"]:
+            shown = len(review["priorities"])
+            story.append(paragraph(f"Priority findings ({shown} of {review['finding_count']})", "Heading3"))
+            story.append(table(
+                ("Priority / finding", "Recommended action", "Source"),
+                [(f"{index}. {label(item['severity'])} - {item['title']}",
+                  f"{item['action']}\n{item['rationale']}",
+                  f"{item['hostname']}\nAssessment {item['assessment_id']}")
+                 for index, item in enumerate(review["priorities"], start=1)],
+                (.29, .47, .24),
+            ))
+        if review["unverified"]:
+            shown = len(review["unverified"])
+            story.append(paragraph(f"Unverified checks ({shown} of {review['unverified_count']})", "Heading3"))
+            story.append(table(("Machine", "Check", "Reason"),
+                               [(item["hostname"], item["scanner_id"], item["reason"])
+                                for item in review["unverified"]], (.24, .35, .41)))
+
+    story.append(paragraph("Machines", "Heading2"))
     endpoints = report["endpoints"]
     if endpoints:
         story.append(table(
@@ -99,14 +132,14 @@ def render_fleet_pdf(report):
             if row["findings_omitted"] or row["malformed_findings"]:
                 story.append(paragraph(f"{row['findings_omitted']} omitted and {row['malformed_findings']} malformed finding records."))
             for finding in row["findings"]:
-                story.extend([
+                finding_block = [
                     paragraph(f"{label(finding['severity'])} — {finding['title']}", "Heading3"),
                     paragraph(finding["description"]),
-                ])
+                ]
                 for item in finding["evidence"]:
                     for key, value in item.items():
-                        story.append(paragraph(f"{label(key)}: {value}"))
-                story.append(Spacer(1, 5))
+                        finding_block.append(paragraph(f"{label(key)}: {value}"))
+                story.append(KeepTogether([*finding_block, Spacer(1, 5)]))
 
     def footer(canvas, doc):
         canvas.saveState()

@@ -7,6 +7,7 @@
  */
 import {
   ArrowLeft,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Radar,
@@ -37,7 +38,7 @@ import {
   presenceTone,
 } from "../lib/domain";
 import { DASH, formatDateTime, formatRelative, shortId, titleCase } from "../lib/format";
-import { DEFAULT_SCANNER_IDS, KNOWN_SCANNERS } from "../lib/scanners";
+import { DEFAULT_SCANNER_IDS, KNOWN_SCANNERS, SCANNER_DOMAINS } from "../lib/scanners";
 import type { FleetEndpoint, PresenceState } from "../types/api";
 import { EndpointTrustControls } from "./Enrollment";
 
@@ -580,11 +581,16 @@ export function ScannerPicker({
   selected: string[];
   onChange: (value: string[]) => void;
 }) {
+  const active = new Set(selected);
   const toggle = (id: string) =>
-    onChange(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id]);
+    onChange(active.has(id) ? selected.filter((item) => item !== id) : [...selected, id]);
+
   return (
     <div className="scanner-picker">
-      <span className="field-label">Scanners</span>
+      <div className="scanner-picker-heading">
+        <span className="field-label">Scanner domains</span>
+        <span className="muted" aria-live="polite">{selected.length} of {KNOWN_SCANNERS.length} selected</span>
+      </div>
       <div className="chip-row">
         <button type="button" className="ghost small"
           onClick={() => onChange(DEFAULT_SCANNER_IDS.slice(0, 4))}>
@@ -594,20 +600,45 @@ export function ScannerPicker({
           onClick={() => onChange(KNOWN_SCANNERS.map((scanner) => scanner.scanner_id))}>
           Full Windows scan
         </button>
+        <button type="button" className="ghost small" disabled={!selected.length} onClick={() => onChange([])}>
+          Clear selection
+        </button>
       </div>
-      <div className="chip-row">
-        {KNOWN_SCANNERS.map((scanner) => (
-          <button
-            key={scanner.scanner_id}
-            type="button"
-            aria-pressed={selected.includes(scanner.scanner_id)}
-            className={selected.includes(scanner.scanner_id) ? "chip active" : "chip"}
-            onClick={() => toggle(scanner.scanner_id)}
-            title={scanner.description}
-          >
-            {scanner.name}
-          </button>
-        ))}
+      <div className="scanner-domains">
+        {SCANNER_DOMAINS.map((domain) => {
+          const scanners = KNOWN_SCANNERS.filter((scanner) => scanner.domain === domain);
+          const ids = new Set(scanners.map((scanner) => scanner.scanner_id));
+          const count = scanners.filter((scanner) => active.has(scanner.scanner_id)).length;
+          const allSelected = count === scanners.length;
+          return (
+            <details className="scanner-domain" key={domain}>
+              <summary>
+                <ChevronDown size={15} aria-hidden="true" />
+                <span>{domain}</span>
+                <small>{count}/{scanners.length} selected</small>
+              </summary>
+              <div className="scanner-domain-checks">
+                <button type="button" className="ghost small"
+                  aria-label={allSelected ? 'Clear ' + domain : 'Select all in ' + domain}
+                  onClick={() => onChange(allSelected
+                    ? selected.filter((id) => !ids.has(id))
+                    : [...new Set([...selected, ...ids])])}>
+                  {allSelected ? "Clear domain" : "Select domain"}
+                </button>
+                <div className="chip-row" role="group" aria-label={domain}>
+                  {scanners.map((scanner) => (
+                    <button key={scanner.scanner_id} type="button"
+                      aria-pressed={active.has(scanner.scanner_id)}
+                      className={active.has(scanner.scanner_id) ? "chip active" : "chip"}
+                      onClick={() => toggle(scanner.scanner_id)} title={scanner.description}>
+                      {scanner.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </details>
+          );
+        })}
       </div>
       <small className="field-hint">
         The expanded checks require the matching Windows agent. Older agents report them as not collected.

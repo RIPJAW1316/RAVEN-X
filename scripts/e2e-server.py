@@ -12,7 +12,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8849)
     args = parser.parse_args()
-    directory = Path(tempfile.mkdtemp(prefix="ravenx-e2e-", dir=os.environ.get("RAVENX_TEST_DATA_ROOT")))
+    parent = os.environ.get("RAVENX_TEST_DATA_ROOT")
+    if parent is None and os.name == "nt":
+        parent = os.environ["LOCALAPPDATA"]
+    directory = Path(tempfile.mkdtemp(prefix="ravenx-e2e-", dir=parent))
     if os.name == "nt":
         from backend.infrastructure.security.windows_files import protect_private_directory, assert_ancestry_not_substitutable
         protect_private_directory(directory)

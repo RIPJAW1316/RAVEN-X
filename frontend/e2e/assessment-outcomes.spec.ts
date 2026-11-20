@@ -431,6 +431,47 @@ test("Fix Issues exports a safe local script and portable HTML", async ({ page }
   expect(document).not.toContain("<script>");
 });
 
+test("assessment picker dispatches only the checks selected inside scanner domains", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await new AssessmentOutcomePortal(page).signIn();
+  await page.route("**/fleet/endpoints?**", route => route.fulfill({ json: {
+    items: [{ endpoint_id: "fixture-machine", hostname: "Lab VM", platform: "Windows", lifecycle_status: "active" }],
+    total: 1,
+  } }));
+  const payloads: unknown[] = [];
+  await page.route("**/assessments", route => {
+    if (route.request().method() === "POST") {
+      payloads.push(route.request().postDataJSON());
+      return route.fulfill({ status: 409, json: { detail: { message: "Fixture dispatch captured" } } });
+    }
+    return route.fulfill({ json: [{
+      assessment_id: "fixture-existing", endpoint_id: "fixture-machine", scanner_ids: ["windows.uac"],
+      requested_at: timestamp, state: "completed",
+    }] });
+  });
+  await page.getByRole("link", { name: "Assessments", exact: true }).click();
+  await page.getByRole("button", { name: "New assessment", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New assessment" });
+  await dialog.getByLabel("Target endpoint").selectOption("fixture-machine");
+  await expect(dialog.getByText("24 of 39 selected")).toBeVisible();
+  await dialog.getByRole("button", { name: "Full Windows scan" }).click();
+  await expect(dialog.getByText("39 of 39 selected")).toBeVisible();
+  await dialog.getByRole("button", { name: "Clear selection" }).click();
+  await expect(dialog.getByRole("button", { name: "Dispatch assessment" })).toBeDisabled();
+
+  await dialog.getByText("Network & remote access", { exact: true }).click();
+  const network = dialog.getByRole("group", { name: "Network & remote access" });
+  await network.getByRole("button", { name: "SMB Client Signing" }).click();
+  await dialog.getByText("Audit & logging", { exact: true }).click();
+  const audit = dialog.getByRole("group", { name: "Audit & logging" });
+  await audit.getByRole("button", { name: "Windows Security Event Log" }).click();
+  await expect(dialog.getByText("2 of 39 selected")).toBeVisible();
+  await dialog.getByRole("button", { name: "Dispatch assessment" }).click();
+  await expect(dialog.getByText("Fixture dispatch captured")).toBeVisible();
+  expect(payloads).toEqual([{ endpoint_id: "fixture-machine",
+    scanner_ids: ["windows.smb-client-signing", "windows.security-event-log"] }]);
+});
+
 test("posture with unknown evidence and a paginated printable machine report", async ({ page }, testInfo) => {
   test.skip(!fixtureResponses, "Presentation fixture");
   await new AssessmentOutcomePortal(page).signIn();
@@ -452,7 +493,7 @@ test("posture with unknown evidence and a paginated printable machine report", a
   await expect(page.getByRole("img", { name: "Unknown: 4" })).toBeVisible();
   await expect(page.getByText("No snapshots captured")).toBeVisible();
   await expect(page.getByRole("cell", {name: "Scanner Failed", exact: true})).toBeVisible();
-  await page.route("**/endpoints/fixture-machine/report", route => route.fulfill({ json: {
+  const report = {
     generated_at: timestamp, summary: { total_enrolled: 1, approved: 1, pending_approval: 0, scanned: 1,
       not_scanned: 0, partial: 0, failed: 0, pending: 0, running: 0, findings_from_completed_scans: 1 },
     endpoints: [{ endpoint_id: "fixture-machine", hostname: "Print fixture", lifecycle_status: "approved",
@@ -460,17 +501,39 @@ test("posture with unknown evidence and a paginated printable machine report", a
       scanner_results: Array.from({ length: 60 }, (_, i) => ({ scanner_id: "fixture-check-" + (i + 1), status: "success", finding_count: 0 })),
       findings: [{ title: "Evidence at end of report", severity: "high", description: "Fixture observation.", evidence: [{ source: "local fixture" }] }],
     }],
-  } }));
+  };
+  await page.route("**/endpoints/fixture-machine/report", route => route.fulfill({ json: report }));
+  await page.route("**/reports/review?**", route => {
+    expect(route.request().method()).toBe("POST");
+    const selection = new URL(route.request().url()).searchParams;
+    expect(selection.get("endpoint_id")).toBe("fixture-machine");
+    expect(selection.get("model")).toBe("gemini");
+    if (selection.get("format") === "pdf") {
+      return route.fulfill({
+        body: "%PDF-1.7\n", contentType: "application/pdf", headers: {
+          "Content-Disposition": 'attachment; filename="ravenx-machine-reviewed-report.pdf"',
+        },
+      });
+    }
+    return route.fulfill({ json: { report, review: {
+      status: "available", model: "gemini-flash", provider: "google_cloud", note: "Verify each recommendation.",
+      finding_count: 1, priorities: [{ finding_key: "fixture-priority", title: "Review firewall",
+        hostname: "Print fixture", severity: "high", action: "Review the firewall profile.",
+        rationale: "Protect the network boundary.", assessment_id: "fixture-run" }],
+      unverified_count: 1, unverified: [{ endpoint_id: "fixture-machine", hostname: "Print fixture",
+        scanner_id: "windows.wifi", assessment_id: "fixture-run", reason: "No wireless adapter detected." }],
+    } } });
+  });
   await page.goto("/#/reports/fixture-machine");
   await expect(page.getByText("Evidence at end of report")).toBeVisible();
-  await page.route("**/endpoints/fixture-machine/report.pdf", route => route.fulfill({
-    body: "%PDF-1.7\n", contentType: "application/pdf", headers: {
-      "Content-Disposition": 'attachment; filename="ravenx-machine-report.pdf"',
-    },
-  }));
+  await page.getByLabel("Review model").selectOption("gemini");
+  await page.getByRole("button", { name: "Review evidence" }).click();
+  await expect(page.getByRole("heading", { name: "Assessment review" })).toBeVisible();
+  await expect(page.getByText("Google Gemini", { exact: true })).toBeVisible();
+  await expect(page.getByText("No wireless adapter detected.")).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download PDF" }).click();
-  expect((await download).suggestedFilename()).toBe("ravenx-machine-report.pdf");
+  expect((await download).suggestedFilename()).toBe("ravenx-machine-reviewed-report.pdf");
   await page.emulateMedia({ media: "print" });
   await expect(page.getByRole("heading", { name: "Print fixture", exact: true })).toBeVisible();
   await expect(page.getByText("Compliance snapshot exports")).toBeHidden();

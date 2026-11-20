@@ -5,11 +5,12 @@ import csv
 import json
 from dataclasses import dataclass
 from io import StringIO
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from ..application.ai.local_analysis import LiveGeminiDisabled
 from ..application.identity.service import AuthenticationFailure
 from ..application.organization.context import OrganizationContextError
 
@@ -120,6 +121,26 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
         return _pdf_response(dependencies.report_service, principal, context,
                              endpoint_id=endpoint_id, assessment_ids=assessment_id)
 
+    @router.post("/organizations/{organization_id}/reports/review", tags=["Tenant Reports"])
+    def reviewed_report(model: Literal["lm_studio", "gemini"] = "lm_studio",
+                        endpoint_id: str | None = Query(default=None, max_length=64),
+                        output: Literal["json", "pdf"] = Query(default="json", alias="format"),
+                        human=Depends(organization_context)):
+        principal, context = human
+        try:
+            result = dependencies.analysis_service.review_report(
+                principal, context, endpoint_id=endpoint_id, model=model,
+            )
+        except PermissionError:
+            raise _error(403, "FORBIDDEN", "AI and report permissions are required")
+        except KeyError:
+            raise _error(404, "NOT_FOUND", "resource not found")
+        except ValueError:
+            raise _error(422, "INVALID_REQUEST", "invalid report selection")
+        if output == "pdf":
+            return _render_pdf_response(result["report"], review=result["review"])
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
     @router.post("/organizations/{organization_id}/ai/analyze", tags=["Local AI"])
     async def analyze(request: Request, human=Depends(organization_context)):
         if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/json":
@@ -190,6 +211,9 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
             raise _error(403, "FORBIDDEN", "permission denied")
         except KeyError:
             raise _error(404, "NOT_FOUND", "resource not found")
+        except LiveGeminiDisabled:
+            raise _error(422, "INVALID_REQUEST", "To use Gemini for this scope, enable Gemini API and "
+                         "Allow Gemini on live assessments in the Omen launcher, then start the server.")
         except ValueError:
             raise _error(422, "INVALID_REQUEST", "invalid analysis selection")
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -204,12 +228,17 @@ def _report_response(service, principal, context, **selection):
 
 def _pdf_response(service, principal, context, **selection):
     report = _build_report(service, principal, context, **selection)
+    return _render_pdf_response(report)
+
+
+def _render_pdf_response(report, *, review=None):
     from ..application.reporting.fleet_pdf import render_fleet_pdf
 
     kind = "machine" if report["scope"]["kind"] == "endpoint" else "fleet"
-    return Response(render_fleet_pdf(report), media_type="application/pdf", headers={
+    suffix = "reviewed-report" if review is not None else "report"
+    return Response(render_fleet_pdf(report, review=review), media_type="application/pdf", headers={
         "Cache-Control": "no-store",
-        "Content-Disposition": f'attachment; filename="ravenx-{kind}-report.pdf"',
+        "Content-Disposition": f'attachment; filename="ravenx-{kind}-{suffix}.pdf"',
     })
 
 

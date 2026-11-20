@@ -29,7 +29,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not set release ownership.' }
 
 To set or rotate your Gemini key, click **Set Gemini key…**. Enter the key twice at the local masked prompt, then close the prompt window. The key remains in Windows Credential Manager for this Windows account on this PC. Use the same account to start the launcher after logging in or rebooting.
 
-Check **Enable Gemini demo** before starting the server. In **AI Analyst**, select **Gemini 3.5 Flash-Lite** with the bundled synthetic demo scope. Only that demo scope uses Gemini. Use the offline rules or the local LM Studio provider for real fleet data. To use LM Studio, load the model in your local server and select **Enable local AI (LM Studio)**.
+To use Gemini on an enrolled endpoint, select **Enable Gemini API** and **Allow Gemini on live assessments** before starting the server. Selecting just the first option enables the bundled demo. For live analysis, Omen sends temporary finding references, check categories and severities to Google. Hostnames, raw evidence and the recommendations linked to each finding stay on Omen.
+
+To use local Gemma, load `google/gemma-3-4b` in LM Studio and start its local server on port 1234. Select **Enable local AI (LM Studio)** and choose the matching model identifier. You can enable both providers together.
+
+In **AI Analyst**, select a completed endpoint assessment scope, choose the provider under **Model**, then click **Analyze evidence**. The result identifies the provider that actually produced the ordering. Under **Reports**, select a review model before exporting the PDF. If a provider is unavailable, the report identifies the offline rules fallback. An assessment with no findings needs no model call.
 
 To check or delete the credential from an elevated Windows PowerShell in the release directory:
 

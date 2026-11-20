@@ -62,7 +62,11 @@ test("real API: one-time secret, pending approval, revocation and no fabricated 
   await page.getByRole("button", { name: "Machine report", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Machine report", exact: true })).toBeVisible();
   await expect(page.getByText("No assessment", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Export JSON", exact: true })).toBeVisible();
+  const [evidence] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Export evidence JSON", exact: true }).click(),
+  ]);
+  expect(evidence.suggestedFilename()).toMatch(/\.json$/);
   await page.setViewportSize({ width: 1024, height: 768 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("machine-report.png"), fullPage: true });

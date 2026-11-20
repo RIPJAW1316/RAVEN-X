@@ -1,4 +1,5 @@
 """Bind a harmless ASGI response on Omen loopback and its current Wi-Fi IP."""
+import os
 import socket
 import ssl
 import threading
@@ -13,10 +14,15 @@ from backend.cli import generate_local_tls
 
 
 def test_ephemeral_private_lan_and_loopback_have_exact_tls_identity(tmp_path):
-    addresses = socket.gethostbyname_ex(socket.gethostname())[2]
-    if "192.168.1.121" not in addresses:
-        pytest.skip("the recorded Omen pilot Wi-Fi address is not assigned")
-    lan = "192.168.1.121"
+    lan = os.environ.get("RAVENX_TEST_PRIVATE_IPV4", "192.168.1.121")
+    validated_hosts(["127.0.0.1", lan], None)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as interface:
+        try:
+            interface.bind((lan, 0))
+        except OSError:
+            if "RAVENX_TEST_PRIVATE_IPV4" in os.environ:
+                raise
+            pytest.skip("the recorded Omen pilot address is not assigned")
     material = generate_local_tls(tmp_path / "tls", [lan],
                                   protect=lambda path: path.mkdir(parents=True))
     other_ca = generate_local_tls(tmp_path / "other", [lan],
