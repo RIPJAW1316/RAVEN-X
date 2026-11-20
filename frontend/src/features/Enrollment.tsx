@@ -56,7 +56,7 @@ export function Enrollment({ organizationId, navigate }: {
     <PageHeading eyebrow="Endpoint trust" title="Enrollment & approval"
       description="Bring a Windows machine into your fleet, then verify its identity before granting assessment access."
       actions={<button type="button" className="primary" onClick={() => { issue.reset(); setIssueOpen(true); }}><Plus size={16} /> Issue token</button>} />
-    <div className="onboarding-steps" aria-label="Enrollment steps">
+    <div className="onboarding-steps" role="group" aria-label="Enrollment steps">
       <div><KeyRound size={21} /><span><strong>01 · Issue</strong><small>One machine. One short-lived token.</small></span></div>
       <div><Laptop size={21} /><span><strong>02 · Connect</strong><small>Agent verifies your server certificate.</small></span></div>
       <div><ShieldCheck size={21} /><span><strong>03 · Approve</strong><small>Confirm the machine, then permit scans.</small></span></div>

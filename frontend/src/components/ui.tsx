@@ -15,9 +15,10 @@ import {
   ServerCrash,
   X,
 } from "lucide-react";
-import type { ReactNode } from "react";
-import { useEffect, useId, useRef } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useId } from "react";
 import { ApiError } from "../api/client";
+import { useDialogFocus } from "../hooks/useDialogFocus";
 import {
   SEVERITY_GLYPH,
   SEVERITY_LABEL,
@@ -293,36 +294,6 @@ export function AsyncSection<T>({
 
 /* ---------------------------------------------------------------- dialogs */
 
-function useDialogFocus(open: boolean, onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = () => Array.from(ref.current?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
-    ) ?? []).filter((element) => element.getClientRects().length > 0);
-    const frame = requestAnimationFrame(() => (focusable()[0] ?? ref.current)?.focus());
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); close.current(); }
-      if (event.key !== "Tab") return;
-      const elements = focusable();
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (!first) { event.preventDefault(); ref.current?.focus(); return; }
-      if (event.shiftKey && (document.activeElement === first || !ref.current?.contains(document.activeElement))) {
-        event.preventDefault(); last.focus();
-      } else if (!event.shiftKey && (document.activeElement === last || !ref.current?.contains(document.activeElement))) {
-        event.preventDefault(); first.focus();
-      }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => { cancelAnimationFrame(frame); document.removeEventListener("keydown", keydown); previous?.focus(); };
-  }, [open]);
-  return ref;
-}
-
 export function Drawer({
   open,
   title,
@@ -336,14 +307,7 @@ export function Drawer({
   children: ReactNode;
   width?: number;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  const dialogRef = useDialogFocus<HTMLElement>(open, onClose);
 
   return (
     <AnimatePresence>
@@ -357,6 +321,8 @@ export function Drawer({
         >
           <motion.aside
             className="drawer"
+            ref={dialogRef}
+            tabIndex={-1}
             style={{ width }}
             role="dialog"
             aria-modal="true"
@@ -392,7 +358,7 @@ export function Modal({
   onClose: () => void;
   children: ReactNode;
 }) {
-  const dialogRef = useDialogFocus(open, onClose);
+  const dialogRef = useDialogFocus<HTMLDivElement>(open, onClose);
 
   return (
     <AnimatePresence>
@@ -489,29 +455,63 @@ export function Tabs<T extends string>({
   tabs,
   active,
   onChange,
+  label,
+  children,
 }: {
   tabs: Array<{ id: T; label: string; count?: number }>;
   active: T;
   onChange: (id: T) => void;
+  label: string;
+  children: ReactNode;
 }) {
   const group = useId();
+  const tabId = (id: T) => `${group}-tab-${id}`;
+  const panelId = (id: T) => `${group}-panel-${id}`;
+
+  function moveTab(event: KeyboardEvent<HTMLDivElement>) {
+    const current = tabs.findIndex((tab) => tabId(tab.id) === (event.target as HTMLElement).id);
+    if (current < 0) return;
+    let next: number;
+    switch (event.key) {
+      case "ArrowLeft": next = (current + tabs.length - 1) % tabs.length; break;
+      case "ArrowRight": next = (current + 1) % tabs.length; break;
+      case "Home": next = 0; break;
+      case "End": next = tabs.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    const nextId = tabs[next].id;
+    document.getElementById(tabId(nextId))?.focus();
+    onChange(nextId);
+  }
   return (
-    <div className="tabs" role="tablist">
+    <>
+      <div className="tabs" role="tablist" aria-label={label} onKeyDown={moveTab}>
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            id={tabId(tab.id)}
+            role="tab"
+            type="button"
+            tabIndex={tab.id === active ? 0 : -1}
+            aria-controls={panelId(tab.id)}
+            aria-selected={tab.id === active}
+            className={tab.id === active ? "tab active" : "tab"}
+            onClick={() => onChange(tab.id)}
+          >
+            {tab.id === active && <SelectionHighlight group={group} />}
+            {tab.label}
+            {tab.count !== undefined && <em>{tab.count}</em>}
+          </button>
+        ))}
+      </div>
       {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          role="tab"
-          type="button"
-          aria-selected={tab.id === active}
-          className={tab.id === active ? "tab active" : "tab"}
-          onClick={() => onChange(tab.id)}
-        >
-          {tab.id === active && <SelectionHighlight group={group} />}
-          {tab.label}
-          {tab.count !== undefined && <em>{tab.count}</em>}
-        </button>
+        <div key={tab.id} id={panelId(tab.id)} role="tabpanel" aria-labelledby={tabId(tab.id)}
+          hidden={tab.id !== active} tabIndex={tab.id === active ? 0 : -1}>
+          {tab.id === active && children}
+        </div>
       ))}
-    </div>
+    </>
   );
 }
 

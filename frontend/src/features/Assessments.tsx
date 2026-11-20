@@ -139,6 +139,7 @@ function AssessmentList({
       />
 
       <Tabs
+        label="Assessment status"
         active={filter}
         onChange={setFilter}
         tabs={[
@@ -147,58 +148,58 @@ function AssessmentList({
           { id: "completed", label: "Completed", count: counts.completed },
           { id: "failed", label: "Failed", count: counts.failed },
         ]}
-      />
-
-      <AsyncSection
-        loading={list.loading}
-        error={list.error}
-        data={list.data}
-        onRetry={list.reload}
-        skeletonRows={5}
       >
-        {() =>
-          filtered.length === 0 ? (
-            <Empty
-              title={filter === "all" ? "No assessments yet" : "Nothing in this state"}
-              detail={
-                filter === "all"
-                  ? "Dispatch an assessment to an enrolled endpoint to begin collecting evidence."
-                  : "No assessments currently match this filter."
-              }
-              action={
-                filter === "all" ? (
-                  <button type="button" className="primary" onClick={() => setComposerOpen(true)}>
-                    <Plus size={15} aria-hidden="true" /> New assessment
-                  </button>
-                ) : undefined
-              }
-            />
-          ) : (
-            <Panel>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Assessment</th>
-                    <th scope="col">Endpoint</th>
-                    <th scope="col">Scanners</th>
-                    <th scope="col">Requested</th>
-                    <th scope="col">State</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((item) => (
-                    <AssessmentRow
-                      key={item.assessment_id}
-                      assessment={item}
-                      onOpen={() => navigate("assessments", item.assessment_id)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </Panel>
-          )
-        }
-      </AsyncSection>
+        <AsyncSection
+          loading={list.loading}
+          error={list.error}
+          data={list.data}
+          onRetry={list.reload}
+          skeletonRows={5}
+        >
+          {() =>
+            filtered.length === 0 ? (
+              <Empty
+                title={filter === "all" ? "No assessments yet" : "Nothing in this state"}
+                detail={
+                  filter === "all"
+                    ? "Dispatch an assessment to an enrolled endpoint to begin collecting evidence."
+                    : "No assessments currently match this filter."
+                }
+                action={
+                  filter === "all" ? (
+                    <button type="button" className="primary" onClick={() => setComposerOpen(true)}>
+                      <Plus size={15} aria-hidden="true" /> New assessment
+                    </button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <Panel>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Assessment</th>
+                      <th scope="col">Endpoint</th>
+                      <th scope="col">Scanners</th>
+                      <th scope="col">Requested</th>
+                      <th scope="col">State</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((item) => (
+                      <AssessmentRow
+                        key={item.assessment_id}
+                        assessment={item}
+                        onOpen={() => navigate("assessments", item.assessment_id)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            )
+          }
+        </AsyncSection>
+      </Tabs>
 
       <Composer
         open={composerOpen}

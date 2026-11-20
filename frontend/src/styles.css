@@ -52,7 +52,7 @@
   --text: #132932;
   --text-dim: #344e5a;
   --muted: #496370;
-  --faint: #526a76;
+  --faint: #405764;
   --accent: #006e62;
   --accent-dim: #005a51;
   --ok: #086b52;
@@ -127,6 +127,23 @@ code,
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  transform: translateY(calc(-100% - 16px));
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+}
+
+.skip-link:focus {
+  transform: none;
 }
 
 /* ============================================================== ambient == */
@@ -2793,7 +2810,7 @@ select option { background: var(--surface-2); color: var(--text); }
     color-scheme: light; --text: #10272e; --text-dim: #253d47; --muted: #394f59; --faint: #415660;
     --bg: white; --surface-1: white; --surface-2: white; --line: #b5c4ca;
   }
-  .sidebar, .topbar, .ambient, .page-actions, .report-actions, .report-review-controls, .panel-actions, .back, .toast,
+  .sidebar, .topbar, .skip-link, .ambient, .page-actions, .report-actions, .report-review-controls, .panel-actions, .back, .toast,
   .page:has(.print-report) > :not(.print-report) { display: none !important; }
   html, body, #root, .app-shell, .workspace, .page, .panel, .table-scroll {
     display: block; width: auto; min-height: 0; height: auto; margin: 0; padding: 0;

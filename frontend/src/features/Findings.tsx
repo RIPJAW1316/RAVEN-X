@@ -101,6 +101,7 @@ export function Findings({
               actions={<span className="panel-meta">{recent.length} shown</span>}
             >
               <Tabs
+                label="Finding severity"
                 active={filter}
                 onChange={setFilter}
                 tabs={[
@@ -108,40 +109,41 @@ export function Findings({
                   { id: "critical" as Filter, label: "Critical" },
                   { id: "high" as Filter, label: "High" },
                 ]}
-              />
-              {recent.length ? (
-                <ul className="finding-list detailed">
-                  {recent.map((finding, index) => (
-                    <li key={`${finding.assessment_id}-${finding.finding_id ?? index}`}>
-                      <button
-                        type="button"
-                        className="finding-row"
-                        onClick={() => navigate("assessments", finding.assessment_id)}
-                      >
-                        <SeverityBadge severity={normalizeSeverity(finding.severity)} />
-                        <span className="finding-row-body">
-                          <strong>{finding.title}</strong>
-                          <small>
-                            {scannerName(finding.scanner_id)} · endpoint{" "}
-                            {shortId(finding.endpoint_id)}
-                            {finding.observed_at ? ` · ${formatRelative(finding.observed_at)}` : ""}
-                          </small>
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <Empty
-                  compact
-                  title="No findings in this window"
-                  detail={
-                    filter === "all"
-                      ? "No high-severity findings were observed in recent assessments."
-                      : "No findings match this severity filter."
-                  }
-                />
-              )}
+              >
+                {recent.length ? (
+                  <ul className="finding-list detailed">
+                    {recent.map((finding, index) => (
+                      <li key={`${finding.assessment_id}-${finding.finding_id ?? index}`}>
+                        <button
+                          type="button"
+                          className="finding-row"
+                          onClick={() => navigate("assessments", finding.assessment_id)}
+                        >
+                          <SeverityBadge severity={normalizeSeverity(finding.severity)} />
+                          <span className="finding-row-body">
+                            <strong>{finding.title}</strong>
+                            <small>
+                              {scannerName(finding.scanner_id)} · endpoint{" "}
+                              {shortId(finding.endpoint_id)}
+                              {finding.observed_at ? ` · ${formatRelative(finding.observed_at)}` : ""}
+                            </small>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Empty
+                    compact
+                    title="No findings in this window"
+                    detail={
+                      filter === "all"
+                        ? "No high-severity findings were observed in recent assessments."
+                        : "No findings match this severity filter."
+                    }
+                  />
+                )}
+              </Tabs>
             </Panel>
           </>
         )}

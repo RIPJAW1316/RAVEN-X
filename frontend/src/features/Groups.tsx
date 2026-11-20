@@ -42,18 +42,20 @@ export function Groups({ organizationId }: { organizationId: string }) {
         description="Reusable endpoint selections for scheduling and bulk assessment."
       />
       <Tabs
+        label="Targeting views"
         active={view}
         onChange={setView}
         tabs={[
           { id: "groups", label: "Endpoint groups", count: groupList.data?.length },
           { id: "scopes", label: "Saved fleet scopes", count: scopeList.data?.length },
         ]}
-      />
-      {view === "groups" ? (
-        <GroupsView organizationId={organizationId} state={groupList} />
-      ) : (
-        <ScopesView organizationId={organizationId} state={scopeList} />
-      )}
+      >
+        {view === "groups" ? (
+          <GroupsView organizationId={organizationId} state={groupList} />
+        ) : (
+          <ScopesView organizationId={organizationId} state={scopeList} />
+        )}
+      </Tabs>
     </>
   );
 }

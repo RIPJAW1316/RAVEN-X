@@ -69,17 +69,21 @@ export function Compliance({ organizationId, navigate }: { organizationId: strin
       >
         {(items) => (
           <>
-            {items.length > 1 && (
+            {items.length > 1 && active ? (
               <Tabs
-                active={active ?? items[0].framework_id}
+                label="Compliance frameworks"
+                active={active}
                 onChange={setFrameworkId}
                 tabs={items.map((framework) => ({
                   id: framework.framework_id,
                   label: framework.name,
                 }))}
-              />
-            )}
-            {active && <FrameworkView key={active} organizationId={organizationId} frameworkId={active} navigate={navigate} />}
+              >
+                <FrameworkView key={active} organizationId={organizationId} frameworkId={active} navigate={navigate} />
+              </Tabs>
+            ) : active ? (
+              <FrameworkView key={active} organizationId={organizationId} frameworkId={active} navigate={navigate} />
+            ) : null}
           </>
         )}
       </AsyncSection>

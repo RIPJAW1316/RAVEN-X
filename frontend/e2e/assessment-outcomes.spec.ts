@@ -161,6 +161,75 @@ test("finding evidence links the implemented local AI advisory workspace", async
   await expect(page.getByRole("button", { name: "Analyze evidence", exact: true })).toBeVisible();
 });
 
+test("assessment filters and overlays keep keyboard focus predictable", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  const portal = new AssessmentOutcomePortal(page);
+  await portal.signIn();
+  await page.route("**/assessments", (route) => route.fulfill({ json: [{
+    assessment_id: "fixture-keyboard-run", endpoint_id: "fixture-machine",
+    scanner_ids: ["windows.uac"], requested_at: timestamp, state: "completed",
+  }] }));
+  await page.getByRole("link", { name: "Assessments", exact: true }).click();
+  const skip = page.getByRole("link", { name: "Skip to main content" });
+  await skip.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#main-content")).toBeFocused();
+  await expect(page).toHaveURL(/#\/assessments$/);
+
+  const filters = page.getByRole("tablist", { name: "Assessment status" });
+  const all = filters.getByRole("tab", { name: /^All/ });
+  const inFlight = filters.getByRole("tab", { name: /^In flight/ });
+  const completed = filters.getByRole("tab", { name: /^Completed/ });
+  const failed = filters.getByRole("tab", { name: /^Failed/ });
+  await all.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(inFlight).toBeFocused();
+  await expect(inFlight).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: /^In flight/ })).toContainText("Nothing in this state");
+  await page.keyboard.press("End");
+  await expect(failed).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(all).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(failed).toBeFocused();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(completed).toBeFocused();
+  await expect(completed).toHaveAttribute("tabindex", "0");
+  await expect(all).toHaveAttribute("tabindex", "-1");
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("tabpanel", { name: /^Completed/ })).toBeFocused();
+
+  const paletteButton = page.getByRole("button", { name: /Jump to a screen/ });
+  await paletteButton.focus();
+  await page.keyboard.press("Control+k");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  const search = palette.getByRole("textbox", { name: "Search screens" });
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(palette.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(paletteButton).toBeFocused();
+
+  await portal.showSyntheticOutcome("completed", true);
+  const findingButton = page.getByRole("button", { name: /Synthetic evidence finding/ });
+  await findingButton.focus();
+  await page.keyboard.press("Enter");
+  const drawer = page.getByRole("dialog", { name: "Synthetic evidence finding" });
+  const closeDrawer = drawer.getByRole("button", { name: "Close", exact: true });
+  await expect(closeDrawer).toBeFocused();
+
+  await page.keyboard.press("Control+k");
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(closeDrawer).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(findingButton).toBeFocused();
+});
+
 test("partial collection shows READ_FAILED and UNSUPPORTED beside the confirmed High finding", async ({ page }) => {
   const portal = new AssessmentOutcomePortal(page);
   await portal.signIn();

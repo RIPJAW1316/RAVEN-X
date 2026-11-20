@@ -33,6 +33,7 @@ import { ApiError, session } from "../api/client";
 import { auth } from "../api/endpoints";
 import { Empty, ErrorState, SelectionHighlight, Toast } from "../components/ui";
 import { useApi } from "../hooks/useApi";
+import { useDialogFocus } from "../hooks/useDialogFocus";
 import { buildHref, useRoute } from "../hooks/useRoute";
 import { Activity as ActivityPage } from "../features/Activity";
 import { Assessments } from "../features/Assessments";
@@ -249,6 +250,10 @@ function Workspace({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="app-shell">
       <div className={reduced ? "ambient reduced" : "ambient"} aria-hidden="true" />
+      <a className="skip-link" href="#main-content" onClick={(event) => {
+        event.preventDefault();
+        document.getElementById("main-content")?.focus();
+      }}>Skip to main content</a>
       <Sidebar active={active} navigate={navigate} />
       <main className="workspace">
         <Topbar
@@ -262,6 +267,8 @@ function Workspace({ onSignOut }: { onSignOut: () => void }) {
           <motion.section
             key={active}
             className="page"
+            id="main-content"
+            tabIndex={-1}
             initial={reduced ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduced ? undefined : { opacity: 0, y: -6 }}
@@ -478,19 +485,11 @@ function CommandPalette({
   onChoose: (section: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const dialogRef = useDialogFocus<HTMLDivElement>(open, onClose);
 
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -510,6 +509,8 @@ function CommandPalette({
         >
           <motion.div
             className="palette"
+            ref={dialogRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-label="Command palette"
@@ -521,7 +522,6 @@ function CommandPalette({
             <div className="palette-input">
               <Command size={16} aria-hidden="true" />
               <input
-                autoFocus
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search screens"
