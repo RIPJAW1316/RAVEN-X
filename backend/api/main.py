@@ -69,7 +69,7 @@ from .human_control_plane import HumanControlPlaneDependencies, create_human_con
 from .tenant_insights import TenantInsightsDependencies, create_tenant_insights_router
 from ..application.reporting.fleet_report import TenantFleetReportService
 from ..application.ai import TenantLocalAnalysisService
-from ..infrastructure.ai import LocalAIConfig, LocalOpenAIProvider
+from ..infrastructure.ai import CloudGeminiConfig, CloudGeminiProvider, LocalAIConfig, LocalOpenAIProvider
 
 # Setup logging
 logging.basicConfig(
@@ -461,7 +461,9 @@ app.include_router(create_human_control_plane_router(HumanControlPlaneDependenci
 human_report_service = TenantFleetReportService(
     agent_endpoint_repository, presence_repository, agent_assessments, human_authorizer)
 local_ai_provider = LocalOpenAIProvider(LocalAIConfig.from_config(config))
-human_local_analysis_service = TenantLocalAnalysisService(human_report_service, human_authorizer, local_ai_provider)
+cloud_gemini_provider = CloudGeminiProvider(CloudGeminiConfig.from_config(config))
+human_local_analysis_service = TenantLocalAnalysisService(
+    human_report_service, human_authorizer, local_ai_provider, cloud_provider=cloud_gemini_provider)
 app.include_router(create_tenant_insights_router(TenantInsightsDependencies(
     human_sessions, human_user_repository, human_context_resolver,
     human_report_service, human_local_analysis_service)), prefix="/api/v1")

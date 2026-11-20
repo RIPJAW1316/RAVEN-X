@@ -144,18 +144,50 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
             body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise _error(400, "MALFORMED_JSON", "request body is not valid JSON")
-        if (not isinstance(body, dict) or set(body) - {"endpoint_id", "assessment_ids", "offline_plan"}
-                or (body.get("endpoint_id") is not None and not isinstance(body["endpoint_id"], str))
-                or (body.get("assessment_ids") is not None and
-                    (not isinstance(body["assessment_ids"], list) or
-                     not all(isinstance(value, str) for value in body["assessment_ids"])))
-                or ("offline_plan" in body and type(body["offline_plan"]) is not bool)):
+        allowed_keys = {"endpoint_id", "assessment_ids", "offline_plan", "model", "demo_id"}
+        if not isinstance(body, dict) or set(body) - allowed_keys:
             raise _error(422, "INVALID_REQUEST", "invalid analysis selection")
+
+        if body.get("endpoint_id") is not None and not isinstance(body["endpoint_id"], str):
+            raise _error(422, "INVALID_REQUEST", "endpoint_id must be a string")
+
+        if body.get("assessment_ids") is not None and (
+            not isinstance(body["assessment_ids"], list)
+            or not all(isinstance(value, str) for value in body["assessment_ids"])
+        ):
+            raise _error(422, "INVALID_REQUEST", "assessment_ids must be a list of strings")
+
+        if body.get("demo_id") is not None and not isinstance(body["demo_id"], str):
+            raise _error(422, "INVALID_REQUEST", "demo_id must be a string")
+
+        # Conflict rule: explicit model cannot be combined with legacy offline_plan
+        if "model" in body and "offline_plan" in body:
+            raise _error(422, "INVALID_REQUEST", "explicit model cannot be combined with legacy offline_plan")
+
+        model_val = None
+        if "model" in body:
+            raw_model = body["model"]
+            if not isinstance(raw_model, str) or not raw_model.strip():
+                raise _error(422, "INVALID_REQUEST", "model must be a non-empty string")
+            model_val = raw_model.strip()
+            if model_val not in {"lm_studio", "offline", "gemini"}:
+                raise _error(422, "INVALID_REQUEST", f"unknown model '{model_val}'")
+
+        if "offline_plan" in body and type(body["offline_plan"]) is not bool:
+            raise _error(422, "INVALID_REQUEST", "offline_plan must be a boolean")
+
+        if body.get("demo_id") is not None and (body.get("endpoint_id") is not None or body.get("assessment_ids") is not None):
+            raise _error(422, "INVALID_REQUEST", "demo_id is mutually exclusive with endpoint_id and assessment_ids")
+
+        if model_val == "gemini" and body.get("demo_id") != "windows-hardening-v1":
+            raise _error(422, "INVALID_REQUEST", "Cloud model gemini is restricted to the bundled synthetic demo assessment")
+
         principal, context = human
         try:
             result = await asyncio.to_thread(
                 dependencies.analysis_service.analyze, principal, context,
                 endpoint_id=body.get("endpoint_id"), assessment_ids=body.get("assessment_ids"),
+                demo_id=body.get("demo_id"), model=model_val,
                 offline_plan=bool(body.get("offline_plan", False)))
         except PermissionError:
             raise _error(403, "FORBIDDEN", "permission denied")

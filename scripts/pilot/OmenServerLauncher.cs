@@ -6,6 +6,8 @@ using System.Linq;
 using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Windows.Forms;
 
 internal static class Launcher
@@ -17,17 +19,82 @@ internal static class Launcher
         Application.SetCompatibleTextRenderingDefault(false);
         try
         {
-            using (var reader = new StreamReader(typeof(Launcher).Assembly.GetManifestResourceStream("workspace")))
-                Application.Run(new LauncherForm(reader.ReadToEnd().Trim()));
+            string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            try
+            {
+                using (var stream = typeof(Launcher).Assembly.GetManifestResourceStream("workspace"))
+                {
+                    if (stream != null)
+                    {
+                        using (var reader = new StreamReader(stream))
+                        {
+                            string embedded = reader.ReadToEnd().Trim();
+                            if (!string.IsNullOrEmpty(embedded) && Directory.Exists(embedded) &&
+                                File.Exists(Path.Combine(embedded, "scripts", "pilot", "Start-Omen-College-Pilot.ps1")))
+                            {
+                                root = embedded;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+#if RAVENX_RELEASE
+            VerifyReleaseHome(root);
+#endif
+            Application.Run(new LauncherForm(root));
         }
         catch (Exception error)
         {
-            MessageBox.Show(error.Message, "RAVEN-X Omen Server", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(error.Message, "RAVEN-X Server", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
+    private static void VerifyReleaseHome(string root)
+    {
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles).TrimEnd('\\');
+        string full = Path.GetFullPath(root).TrimEnd('\\');
+        if (!full.StartsWith(programFiles + "\\", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Extract the verified server ZIP into a protected folder under Program Files.");
+        var trusted = new[] { "S-1-3-0", "S-1-5-18", "S-1-5-32-544",
+            "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" };
+        const int writeMask = 0x100D0156 | 0x40000000;
+        Action<string> check = path =>
+        {
+            FileAttributes attributes = File.GetAttributes(path);
+            FileSystemSecurity acl = (attributes & FileAttributes.Directory) != 0
+                ? (FileSystemSecurity)Directory.GetAccessControl(path) : File.GetAccessControl(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                !trusted.Contains(acl.GetOwner(typeof(SecurityIdentifier)).Value) ||
+                acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(rule =>
+                    rule.AccessControlType == AccessControlType.Allow && !trusted.Contains(rule.IdentityReference.Value) &&
+                    ((int)rule.FileSystemRights & writeMask) != 0))
+                throw new InvalidOperationException("The release directory must be owned and writable only by trusted Windows administrators.");
+        };
+        for (string current = full; ; current = Path.GetDirectoryName(current))
+        {
+            check(current);
+            if (String.Equals(current, programFiles, StringComparison.OrdinalIgnoreCase)) break;
+        }
+        string scripts = Path.Combine(full, "scripts");
+        check(scripts);
+        check(Path.Combine(scripts, "pilot"));
+        check(Path.Combine(scripts, "pilot", "Start-Omen-College-Pilot.ps1"));
+        foreach (string file in new[] { "manage-gemini-credentials.ps1", "server-runtime.ps1", "release-integrity.ps1", "managed-python.ps1" })
+            check(Path.Combine(scripts, file));
+    }
+
+    private static string ReleaseSwitch()
+    {
+#if RAVENX_RELEASE
+        return " -ReleasePackage";
+#else
+        return "";
+#endif
+    }
+
     internal static ProcessStartInfo PilotStartInfo(string root, string pilot, string address, int port,
-        bool lan, bool ai, string email)
+        bool lan, bool ai, bool gemini, string email)
     {
         string script = Path.Combine(root, "scripts", "pilot", "Start-Omen-College-Pilot.ps1");
         var info = new ProcessStartInfo
@@ -36,6 +103,7 @@ internal static class Launcher
             Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script +
                 "\" -ManagedByLauncher -PilotName " + pilot + " -LabAddress " + address + " -Port " + port +
                 (lan ? "" : " -LoopbackOnly") + (ai ? "" : " -DisableLocalAi") +
+                (gemini ? " -EnableGeminiDemo" : "") + ReleaseSwitch() +
                 (email == null ? "" : " -AdministratorEmail \"" + email + "\""),
             WorkingDirectory = root,
             UseShellExecute = false,
@@ -51,6 +119,22 @@ internal static class Launcher
         info.EnvironmentVariables.Remove("PSModulePath");
         return info;
     }
+
+    internal static void OpenGeminiKeyPrompt(string root)
+    {
+#if RAVENX_RELEASE
+        VerifyReleaseHome(root);
+#endif
+        string script = Path.Combine(root, "scripts", "manage-gemini-credentials.ps1");
+        using (var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+            Arguments = "-NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File \"" + script +
+                "\" -Action Set" + ReleaseSwitch(),
+            WorkingDirectory = root,
+            UseShellExecute = true
+        })) { }
+    }
 }
 
 internal sealed class LauncherForm : Form
@@ -63,10 +147,12 @@ internal sealed class LauncherForm : Form
     private readonly NumericUpDown port = new NumericUpDown { Minimum = 1024, Maximum = 65535, Value = 8443, Width = 105 };
     private readonly CheckBox lan = new CheckBox { Text = "Allow LAN clients", AutoSize = true, Checked = true };
     private readonly CheckBox ai = new CheckBox { Text = "Enable local AI (LM Studio)", AutoSize = true };
+    private readonly CheckBox gemini = new CheckBox { Text = "Enable Gemini demo", AutoSize = true };
     private readonly Label status = new Label { AutoSize = true, Text = "Stopped", Margin = new Padding(12, 8, 0, 0) };
     private readonly Button start = ButtonFor("Start server");
     private readonly Button stop = ButtonFor("Stop server");
     private readonly Button refresh = ButtonFor("Refresh addresses");
+    private readonly Button geminiKey = ButtonFor("Set Gemini key…");
     private readonly Button portal = ButtonFor("Open portal");
     private readonly Button enrollment = ButtonFor("Enrollment");
     private readonly Button fleet = ButtonFor("Fleet");
@@ -106,8 +192,8 @@ internal sealed class LauncherForm : Form
         setup.Controls.Add(profile, 0, 1);
         setup.Controls.Add(address, 1, 1);
         setup.Controls.Add(port, 2, 1);
-        var options = Row(lan, ai, refresh);
-        var actions = Row(start, stop, status);
+        var options = Row(lan, ai, gemini, refresh);
+        var actions = Row(start, stop, geminiKey, status);
         var links = Row(portal, enrollment, fleet, copy, saveCa);
         layout.Controls.Add(title);
         layout.Controls.Add(setup);
@@ -132,6 +218,7 @@ internal sealed class LauncherForm : Form
         profile.Text = "home";
         RefreshAddresses();
         refresh.Click += delegate { RefreshAddresses(); };
+        geminiKey.Click += delegate { RunUi(() => Launcher.OpenGeminiKeyPrompt(workspace)); };
         lan.CheckedChanged += delegate { UpdateControls(); };
         start.Click += delegate { StartPilot(); };
         stop.Click += delegate { StopPilot(); };
@@ -207,7 +294,7 @@ internal sealed class LauncherForm : Form
             sha = null;
             status.Text = "Starting…";
             var child = new Process { StartInfo = Launcher.PilotStartInfo(workspace, name, host, (int)port.Value,
-                lan.Checked, ai.Checked, email), EnableRaisingEvents = true };
+                lan.Checked, ai.Checked, gemini.Checked, email), EnableRaisingEvents = true };
             child.OutputDataReceived += (sender, e) => ShowLine(child, e.Data, true);
             child.ErrorDataReceived += (sender, e) => ShowLine(child, e.Data, false);
             child.Exited += (sender, e) =>
@@ -302,7 +389,7 @@ internal sealed class LauncherForm : Form
     {
         bool idle = worker == null;
         bool connected = !stopping && status.Text == "Running" && url != null && caPath != null && sha != null;
-        start.Enabled = profile.Enabled = port.Enabled = lan.Enabled = ai.Enabled = idle;
+        start.Enabled = profile.Enabled = port.Enabled = lan.Enabled = ai.Enabled = gemini.Enabled = idle;
         address.Enabled = refresh.Enabled = idle && lan.Checked;
         stop.Enabled = !idle && !stopping;
         portal.Enabled = fleet.Enabled = enrollment.Enabled = copy.Enabled = saveCa.Enabled = connected;

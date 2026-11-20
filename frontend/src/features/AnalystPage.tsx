@@ -1,4 +1,4 @@
-/** Local analysis of assessment evidence for the selected organization. */
+/** Local and cloud demo analysis of assessment evidence for the selected organization. */
 import { Radar, ShieldAlert, Sparkles } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -103,47 +103,163 @@ export function Analyst({
 function LocalAnalysisPanel({ organizationId, navigate }: {
   organizationId: string; navigate: (section: string, ...params: string[]) => void;
 }) {
-  const [endpointId, setEndpointId] = useState("");
+  const [scopeKey, setScopeKey] = useState("");
+  const [model, setModel] = useState<"lm_studio" | "offline" | "gemini">("lm_studio");
   const [result, setResult] = useState<LocalAnalysis | null>(null);
   const report = useApi((signal) => insights.fleetReport(organizationId, signal), [organizationId]);
-  const analyze = useMutation((id: string) => insights.analyze(organizationId, id || undefined, true));
+  const analyze = useMutation((options: Parameters<typeof insights.analyze>[1]) =>
+    insights.analyze(organizationId, options, true),
+  );
+
   const reasons: Record<string, string> = {
-    LOCAL_AI_DISABLED: "Local inference is disabled. An administrator can connect a loopback Llama runtime using the deployment guide.",
+    LOCAL_AI_DISABLED: "Local inference is disabled. An administrator can connect a loopback runtime using the deployment guide.",
     LOCAL_AI_UNAVAILABLE: "The local inference service could not return a valid response. Stored evidence remains available.",
     NO_COMPLETED_EVIDENCE: "There is no completed scan evidence in this scope. Run an assessment before requesting analysis.",
   };
-  return <Panel title="Local evidence analysis" icon={<Sparkles size={15} />}>
-    <p className="panel-note">On-demand interpretation from a local model. Assessment evidence is sent only to the configured loopback runtime. Suggestions require human review.</p>
-    <AsyncSection loading={report.loading} error={report.error} data={report.data} onRetry={report.reload}>
-      {(data) => <div className="analysis-controls">
-        <Field label="Evidence scope"><select value={endpointId} onChange={(event) => { setEndpointId(event.target.value); setResult(null); analyze.reset(); }} disabled={analyze.busy}>
-          <option value="">Consolidated fleet evidence</option>
-          {data.endpoints.map((endpoint) => <option key={endpoint.endpoint_id} value={endpoint.endpoint_id}>{endpoint.hostname} · {endpoint.scan_status}</option>)}
-        </select></Field>
-        <button type="button" className="primary" disabled={analyze.busy} onClick={async () => { setResult(null); const value = await analyze.run(endpointId); if (value) setResult(value); }}>
-          <Sparkles size={15} /> {analyze.busy ? "Analyzing local evidence…" : "Analyze evidence"}
-        </button>
-      </div>}
-    </AsyncSection>
-    {analyze.error && <ErrorState error={analyze.error} />}
-    {result && <div className="analysis-result" aria-live="polite">
-      <Badge tone={result.status === "available" ? (result.model === "Offline rules" ? "warn" : "info") : "warn"}>
-        {result.status === "available" ? (result.model === "Offline rules" ? "Offline rules" : "AI advisory") : "Analysis unavailable"}
-      </Badge>
-      {result.status === "available" ? <>
-        <p className="panel-note">{result.model} · {formatDateTime(result.generated_at ?? null)}. {result.notice}</p>
-        <article className="analysis-narrative" aria-label="Assessment interpretation">
-          <Markdown remarkPlugins={[remarkGfm]} skipHtml disallowedElements={["a", "img", "input"]} unwrapDisallowed>
-            {unwrapAnalysis(result.analysis ?? "")}
-          </Markdown>
-        </article>
-        {result.coverage && <p className="panel-note">{result.coverage.included_endpoints} machines and {result.coverage.included_findings} findings included. {result.coverage.truncated ? "Some findings were omitted by report limits; consult the full report." : ""}</p>}
-      </> : <p>{reasons[result.reason_code ?? ""] ?? "Analysis is unavailable for the selected evidence."}</p>}
-      {result.source.assessment_ids.length > 0 && <div className="report-actions"><span className="muted">Source assessments</span>
-        {result.source.assessment_ids.map((id) => <button key={id} type="button" className="link mono" onClick={() => navigate("assessments", id)}>{shortId(id)}</button>)}
-      </div>}
-    </div>}
-  </Panel>;
+
+  const handleScopeChange = (newScope: string) => {
+    setScopeKey(newScope);
+    setResult(null);
+    analyze.reset();
+    if (newScope !== "__demo__" && model === "gemini") {
+      setModel("lm_studio");
+    }
+  };
+
+  const handleModelChange = (newModel: "lm_studio" | "offline" | "gemini") => {
+    if (newModel === "gemini" && scopeKey !== "__demo__") {
+      return;
+    }
+    setModel(newModel);
+    setResult(null);
+    analyze.reset();
+  };
+
+  const runAnalysis = async () => {
+    setResult(null);
+    const selection = {
+      model,
+      ...(scopeKey === "__demo__"
+        ? { demoId: "windows-hardening-v1" }
+        : scopeKey
+        ? { endpointId: scopeKey }
+        : {}),
+    };
+    const value = await analyze.run(selection);
+    if (value) setResult(value);
+  };
+
+  return (
+    <Panel title="Local evidence analysis" icon={<Sparkles size={15} />}>
+      <p className="panel-note">
+        On-demand interpretation of assessment evidence. Assessment evidence is sent only to the configured runtime. Suggestions require human review.
+      </p>
+      <AsyncSection loading={report.loading} error={report.error} data={report.data} onRetry={report.reload}>
+        {(data) => (
+          <div className="analysis-controls">
+            <Field label="Evidence scope">
+              <select
+                value={scopeKey}
+                onChange={(event) => handleScopeChange(event.target.value)}
+                disabled={analyze.busy}
+              >
+                <option value="">Consolidated fleet evidence</option>
+                {data.endpoints.map((endpoint) => (
+                  <option key={endpoint.endpoint_id} value={endpoint.endpoint_id}>
+                    {endpoint.hostname} · {endpoint.scan_status}
+                  </option>
+                ))}
+                <option value="__demo__">Bundled synthetic Windows demo</option>
+              </select>
+            </Field>
+
+            <Field label="Model">
+              <select
+                value={model}
+                onChange={(event) => handleModelChange(event.target.value as "lm_studio" | "offline" | "gemini")}
+                disabled={analyze.busy}
+              >
+                <option value="lm_studio">Local model (LM Studio)</option>
+                <option value="offline">Offline rules (deterministic)</option>
+                <option value="gemini" disabled={scopeKey !== "__demo__"}>
+                  Gemini 3.5 Flash-Lite (Cloud Demo){scopeKey !== "__demo__" ? " (demo only)" : ""}
+                </option>
+              </select>
+            </Field>
+
+            <button
+              type="button"
+              className="primary"
+              disabled={analyze.busy}
+              onClick={runAnalysis}
+            >
+              <Sparkles size={15} />{" "}
+              {analyze.busy ? "Analyzing evidence…" : "Analyze evidence"}
+            </button>
+          </div>
+        )}
+      </AsyncSection>
+      {analyze.error && <ErrorState error={analyze.error} />}
+      {result && (
+        <div className="analysis-result" aria-live="polite">
+          <Badge
+            tone={
+              result.status === "available"
+                ? result.provider === "offline" || (!result.provider && (result.fallback_used || result.model === "Offline rules"))
+                  ? "warn"
+                  : "info"
+                : "warn"
+            }
+          >
+            {result.status === "available"
+              ? result.provider === "offline" || (!result.provider && result.model === "Offline rules")
+                ? "Offline rules"
+                : result.provider === "google_cloud"
+                ? "Gemini 3.5 Flash-Lite (Cloud Demo)"
+                : "AI advisory"
+              : "Analysis unavailable"}
+          </Badge>
+          {result.status === "available" ? (
+            <>
+              <p className="panel-note">
+                {result.model} · {formatDateTime(result.generated_at ?? null)}. {result.notice}
+                {result.fallback_used && result.fallback_reason ? ` (${result.fallback_reason})` : ""}
+              </p>
+              <article className="analysis-narrative" aria-label="Assessment interpretation">
+                <Markdown remarkPlugins={[remarkGfm]} skipHtml disallowedElements={["a", "img", "input"]} unwrapDisallowed>
+                  {unwrapAnalysis(result.analysis ?? "")}
+                </Markdown>
+              </article>
+              {result.coverage && (
+                <p className="panel-note">
+                  {result.coverage.included_endpoints} machines and {result.coverage.included_findings} findings included.{" "}
+                  {result.coverage.truncated ? "Some findings were omitted by report limits; consult the full report." : ""}
+                </p>
+              )}
+            </>
+          ) : (
+            <p>{reasons[result.reason_code ?? ""] ?? "Analysis is unavailable for the selected evidence."}</p>
+          )}
+          {result.source.kind === "bundled_demo" ? (
+            <div className="report-actions">
+              <span className="muted">
+                Source: First-party bundled synthetic Windows demo ({result.source.demo_id ?? "windows-hardening-v1"})
+              </span>
+            </div>
+          ) : result.source.assessment_ids.length > 0 ? (
+            <div className="report-actions">
+              <span className="muted">Source assessments</span>
+              {result.source.assessment_ids.map((id) => (
+                <button key={id} type="button" className="link mono" onClick={() => navigate("assessments", id)}>
+                  {shortId(id)}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Panel>
+  );
 }
 
 function unwrapAnalysis(value: string): string {

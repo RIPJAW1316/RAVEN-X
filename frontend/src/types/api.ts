@@ -204,8 +204,8 @@ export interface EndpointEvidenceReport {
 }
 export interface LocalAnalysis {
   status: "available" | "unavailable"; reason_code: string | null; advisory: boolean; analysis: string | null;
-  source: { organization_id: string; assessment_ids: string[]; endpoint_ids: string[]; report_generated_at: string };
-  model?: string; generated_at?: string; notice?: string;
+  source: { organization_id: string; assessment_ids: string[]; endpoint_ids: string[]; report_generated_at: string; kind?: string; demo_id?: string };
+  model?: string; provider?: string; requested_model?: string; fallback_used?: boolean; fallback_reason?: string | null; generated_at?: string; notice?: string;
   coverage?: { scanned_endpoints: number; included_endpoints: number; included_findings: number; truncated: boolean };
 }
 

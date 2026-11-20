@@ -1,0 +1,5 @@
+# Optional Google Cloud Gemini Demo Requirements
+# Required only when using live Google Cloud ADC token exchange (google-auth).
+# The default local Windows install (offline rules and local LM Studio) requires none of these.
+google-auth>=2.29.0
+requests>=2.31.0

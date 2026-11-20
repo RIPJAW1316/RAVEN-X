@@ -55,14 +55,31 @@ export const insights = {
     : `${org(id)}/reports/fleet.pdf`),
   fleetReport: (id: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/reports/fleet`, { signal }),
   endpointReport: (id: string, endpointId: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report`, { signal }),
-  analyze: (id: string, endpointId?: string, offlinePlan?: boolean) =>
-    request<LocalAnalysis>(`${org(id)}/ai/analyze`, {
+  analyze: (
+    id: string,
+    selection?: string | { endpointId?: string; demoId?: string; model?: "lm_studio" | "offline" | "gemini"; offlinePlan?: boolean },
+    offlinePlan?: boolean,
+  ) => {
+    const body: Record<string, unknown> = {};
+    if (typeof selection === "string") {
+      if (selection) body.endpoint_id = selection;
+      if (offlinePlan !== undefined) body.offline_plan = offlinePlan;
+    } else if (selection && typeof selection === "object") {
+      if (selection.endpointId) body.endpoint_id = selection.endpointId;
+      if (selection.demoId) body.demo_id = selection.demoId;
+      if (selection.model) {
+        body.model = selection.model;
+      } else if (selection.offlinePlan !== undefined) {
+        body.offline_plan = selection.offlinePlan;
+      }
+    } else if (offlinePlan !== undefined) {
+      body.offline_plan = offlinePlan;
+    }
+    return request<LocalAnalysis>(`${org(id)}/ai/analyze`, {
       method: "POST",
-      body: {
-        ...(endpointId ? { endpoint_id: endpointId } : {}),
-        ...(offlinePlan !== undefined ? { offline_plan: offlinePlan } : {}),
-      },
-    }),
+      body,
+    });
+  },
 };
 
 export const enrollment = {

@@ -21,7 +21,8 @@ param(
     [Parameter(Mandatory = $true)][string]$CaCertSha256,
     [switch]$NoStart,
     [switch]$AllowEnrollmentRetry,
-    [Security.SecureString]$BootstrapToken
+    [Security.SecureString]$BootstrapToken,
+    [ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$ExpectedManifestSha256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,7 +50,9 @@ foreach ($basePath in @($env:ProgramFiles, $env:ProgramData)) {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'release-integrity.ps1')
-$release = Assert-VerifiedRelease $repoRoot
+$manifestArgs = @{}
+if ($ExpectedManifestSha256) { $manifestArgs.ExpectedManifestSha256 = $ExpectedManifestSha256 }
+$release = Assert-VerifiedRelease $repoRoot @manifestArgs
 $installParent = Join-Path $env:ProgramFiles 'RavenX'
 $installRoot = Join-Path $env:ProgramFiles 'RavenX\Agent'
 $dataRoot = Join-Path $env:ProgramData 'RavenX\agent'

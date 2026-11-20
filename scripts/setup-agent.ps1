@@ -1,6 +1,9 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
-param([Parameter(Mandatory=$true)][string]$ConfigPath)
+param(
+    [Parameter(Mandatory=$true)][string]$ConfigPath,
+    [ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$ExpectedManifestSha256
+)
 $ErrorActionPreference = 'Stop'
 $phase = 'initialization'
 $sessionVerified = $false
@@ -32,7 +35,9 @@ try {
     . (Join-Path $PSScriptRoot 'release-integrity.ps1')
     $phase = 'release verification'
     Write-Host '[1/4] Verifying installer payload and public connection settings'
-    Assert-VerifiedRelease $payload | Out-Null
+    $manifestArgs = @{}
+    if ($ExpectedManifestSha256) { $manifestArgs.ExpectedManifestSha256 = $ExpectedManifestSha256 }
+    Assert-VerifiedRelease $payload @manifestArgs | Out-Null
     Assert-TrustedReleaseTree $session
     $sessionVerified = $true
     $line = [Console]::In.ReadLine()
@@ -62,7 +67,7 @@ try {
     $phase = 'agent installation and enrollment'
     Write-Host '[4/4] Installing and enrolling the agent'
     $arguments = @{ServerUrl=$config.server_url;EnrollmentId=$enrollmentId;CaCertPath=$config.ca_path;CaCertSha256=$config.ca_sha256;BootstrapToken=$token;AllowEnrollmentRetry=$true}
-    & (Join-Path $PSScriptRoot 'install-agent.ps1') @arguments
+    & (Join-Path $PSScriptRoot 'install-agent.ps1') @arguments @manifestArgs
     'Installed and enrolled. Approve this computer in Omen Enrollment, then check Fleet for Online.' | Set-Content -LiteralPath (Join-Path $session 'result.txt') -Encoding UTF8
     exit 0
 } catch {

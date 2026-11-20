@@ -3,7 +3,10 @@
 # protects extracted bytes and detects omission or addition before execution.
 
 function Assert-ReleaseManifestFiles {
-    param([Parameter(Mandatory = $true)][string]$Root)
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$ExpectedManifestSha256
+    )
     $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop
     if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw 'Release stage is not a normal directory.'
@@ -14,7 +17,15 @@ function Assert-ReleaseManifestFiles {
         throw 'Release manifest is unsafe.'
     }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-    if ($manifest.format -ne 1 -or $manifest.version -ne '1.0.0-rc11' -or
+    if ($manifest.format -ne 1) { throw 'Release manifest format is unexpected.' }
+    if ($ExpectedManifestSha256) {
+        if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ine $ExpectedManifestSha256 -or
+            $manifest.version -ne '1.0.0' -or
+            $manifest.package -ne 'RAVEN-X Enterprise Endpoint Agent' -or
+            [string]$manifest.source_commit -cnotmatch '\A[0-9a-f]{40}\z') {
+            throw 'Release manifest differs from the compiled installer.'
+        }
+    } elseif ($manifest.version -ne '1.0.0-rc11' -or
         $manifest.source_baseline -ne 'b53ac0fea11432badcc13e89d0d0f3966d1689bd' -or
         $manifest.accepted_diff_sha256 -ne '2a2a8693049af4644312d8e234c6cd5c589c317792326c4e2aecd354c10aa34c') {
         throw 'Release manifest identity is unexpected.'
@@ -124,7 +135,13 @@ function Assert-TrustedReleaseTree {
 }
 
 function Assert-VerifiedRelease {
-    param([Parameter(Mandatory = $true)][string]$Root)
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [ValidatePattern('\A[0-9a-fA-F]{64}\z')][string]$ExpectedManifestSha256
+    )
     Assert-TrustedReleaseTree $Root
+    if ($ExpectedManifestSha256) {
+        return Assert-ReleaseManifestFiles $Root -ExpectedManifestSha256 $ExpectedManifestSha256
+    }
     return Assert-ReleaseManifestFiles $Root
 }

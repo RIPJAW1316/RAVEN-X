@@ -263,9 +263,109 @@ test("AI Analyst requests the fix plan and labels offline results", async ({ pag
   const request = page.waitForRequest(req => req.method() === "POST" && req.url().endsWith("/ai/analyze"));
   await page.getByRole("button", { name: "Analyze evidence" }).click();
 
-  expect((await request).postDataJSON()).toEqual({ offline_plan: true });
-  await expect(page.getByText("Offline rules", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Prioritized Fix Plan" })).toBeVisible();
+  expect((await request).postDataJSON()).toEqual({ model: "lm_studio" });
+  const resultContainer = page.locator(".analysis-result");
+  await expect(resultContainer).toBeVisible();
+  await expect(resultContainer.getByText("Offline rules", { exact: true })).toBeVisible();
+  await expect(resultContainer.getByRole("heading", { name: "Prioritized Fix Plan" })).toBeVisible();
+});
+
+test("AI Analyst model selector requires explicit demo scope for Gemini and clears stale output", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  const portal = new AssessmentOutcomePortal(page);
+  await portal.signIn();
+  await page.getByRole("link", { name: "AI Analyst", exact: true }).click();
+
+  let capturedRequests: any[] = [];
+  let geminiShouldFallback = false;
+  await page.route("**/ai/analyze", async route => {
+    const postData = route.request().postDataJSON();
+    capturedRequests.push(postData);
+    if (postData.model === "offline") {
+      await route.fulfill({ json: {
+        status: "available", model: "Offline rules", provider: "offline", fallback_used: false,
+        source: { assessment_ids: ["fixture-run"] },
+        analysis: "### Prioritized Fix Plan\n\nExplicit offline rules plan.",
+      } });
+    } else if (postData.model === "gemini") {
+      if (geminiShouldFallback) {
+        await route.fulfill({ json: {
+          status: "available", model: "Offline rules", provider: "offline", fallback_used: true,
+          fallback_reason: "Gemini response validation failed; evaluated offline rules instead.",
+          notice: "Analysis was evaluated deterministically from verified local rules because Gemini inference was unavailable or invalid.",
+          source: { kind: "bundled_demo", demo_id: "windows-hardening-v1", assessment_ids: [] },
+          analysis: "### Prioritized Fix Plan\n\nFallback offline rules plan.",
+        } });
+      } else {
+        await route.fulfill({ json: {
+          status: "available", model: "gemini-3.5-flash-lite", provider: "google_cloud", fallback_used: false,
+          source: { kind: "bundled_demo", demo_id: "windows-hardening-v1", assessment_ids: [] },
+          analysis: "### Prioritized Fix Plan\n\nGemini cloud demo prioritization.",
+        } });
+      }
+    }
+  });
+
+  const geminiOption = page.getByLabel("Model").locator('option[value="gemini"]');
+  const resultContainer = page.locator(".analysis-result");
+
+  // Gemini option is initially disabled while on fleet scope: assert native disabled property and attribute
+  expect(await geminiOption.evaluate((el: HTMLOptionElement) => el.disabled)).toBe(true);
+  await expect(geminiOption).toHaveAttribute("disabled", "");
+  await expect(geminiOption).toHaveJSProperty("disabled", true);
+
+  // Select Offline rules and run analysis
+  await page.getByLabel("Model").selectOption("offline");
+  await page.getByRole("button", { name: "Analyze evidence" }).click();
+  await expect(resultContainer).toBeVisible();
+  await expect(resultContainer.getByText("Explicit offline rules plan.")).toBeVisible();
+  await expect(resultContainer.getByText("Offline rules", { exact: true })).toBeVisible();
+  // Selector sends only model plus source (no legacy offline_plan boolean)
+  expect(capturedRequests[0]).toEqual({ model: "offline" });
+
+  // Operator must explicitly choose demo scope before enabling Gemini
+  await page.getByLabel("Evidence scope").selectOption("__demo__");
+  // Stale result is immediately cleared on scope change
+  await expect(resultContainer).not.toBeVisible();
+  // Now Gemini becomes enabled for the demo
+  expect(await geminiOption.evaluate((el: HTMLOptionElement) => el.disabled)).toBe(false);
+  await expect(geminiOption).not.toHaveAttribute("disabled");
+  await expect(geminiOption).toHaveJSProperty("disabled", false);
+
+  // Selecting Gemini does NOT change the evidence scope
+  await page.getByLabel("Model").selectOption("gemini");
+  await expect(page.getByLabel("Evidence scope")).toHaveValue("__demo__");
+
+  await page.getByRole("button", { name: "Analyze evidence" }).click();
+  await expect(resultContainer).toBeVisible();
+  await expect(resultContainer.getByText("Gemini cloud demo prioritization.")).toBeVisible();
+  // Cloud badge derived from provider: "google_cloud" scoped to analysis-result container
+  await expect(resultContainer.getByText("Gemini 3.5 Flash-Lite (Cloud Demo)", { exact: true })).toBeVisible();
+  await expect(resultContainer.getByText("Source: First-party bundled synthetic Windows demo")).toBeVisible();
+  expect(capturedRequests[1]).toEqual({ model: "gemini", demo_id: "windows-hardening-v1" });
+
+  // Switching model clears stale result
+  await page.getByLabel("Model").selectOption("offline");
+  await expect(resultContainer).not.toBeVisible();
+
+  // Test cloud fallback display: switch back to Gemini, but inference fails back to offline rules
+  await page.getByLabel("Model").selectOption("gemini");
+  geminiShouldFallback = true;
+  await page.getByRole("button", { name: "Analyze evidence" }).click();
+  await expect(resultContainer).toBeVisible();
+  await expect(resultContainer.getByText("Fallback offline rules plan.")).toBeVisible();
+  // Badge in analysis-result reflects offline rules provider despite selecting gemini
+  await expect(resultContainer.getByText("Offline rules", { exact: true })).toBeVisible();
+  // Fallback notice is disclosed
+  await expect(resultContainer.getByText("Gemini response validation failed; evaluated offline rules instead.")).toBeVisible();
+
+  // Changing evidence scope away from demo immediately clears stale result and reverts model from gemini
+  await page.getByLabel("Evidence scope").selectOption("");
+  await expect(resultContainer).not.toBeVisible();
+  await expect(page.getByLabel("Model")).toHaveValue("lm_studio");
+  expect(await geminiOption.evaluate((el: HTMLOptionElement) => el.disabled)).toBe(true);
+  await expect(geminiOption).toHaveAttribute("disabled", "");
+  await expect(geminiOption).toHaveJSProperty("disabled", true);
 });
 
 test("Enrollment renews eligible expired tokens and keeps their ID", async ({ page }) => {

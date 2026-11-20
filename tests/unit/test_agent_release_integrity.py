@@ -31,11 +31,12 @@ def _stage(tmp_path):
     return stage
 
 
-def _verify(stage, *, trusted=False):
+def _verify(stage, *, trusted=False, expected_manifest=None):
     command = "Assert-TrustedReleaseTree" if trusted else "Assert-ReleaseManifestFiles"
     escaped_script = str(VERIFIER).replace("'", "''")
     escaped_stage = str(stage).replace("'", "''")
-    code = (f". '{escaped_script}'; try {{ {command} '{escaped_stage}' | Out-Null; 'ACCEPT' }} "
+    manifest_arg = f" -ExpectedManifestSha256 '{expected_manifest}'" if expected_manifest else ""
+    code = (f". '{escaped_script}'; try {{ {command} '{escaped_stage}'{manifest_arg} | Out-Null; 'ACCEPT' }} "
             "catch { 'REJECT:' + $_.Exception.Message }")
     result = subprocess.run([shutil.which("pwsh") or "powershell.exe", "-NoProfile", "-NonInteractive",
                              "-Command", code], capture_output=True, text=True, timeout=20)
@@ -45,6 +46,22 @@ def _verify(stage, *, trusted=False):
 
 def test_complete_manifest_is_accepted(tmp_path):
     assert _verify(_stage(tmp_path)) == "ACCEPT"
+
+
+def test_v1_payload_requires_compiled_manifest_digest(tmp_path):
+    stage = _stage(tmp_path)
+    manifest_path = stage / "release-manifest.json"
+    files = json.loads(manifest_path.read_bytes())["files"]
+    manifest = {"format": 1, "package": "RAVEN-X Enterprise Endpoint Agent",
+                "version": "1.0.0", "source_commit": "a" * 40, "files": files}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    assert _verify(stage).startswith("REJECT:")
+    assert _verify(stage, expected_manifest=digest) == "ACCEPT"
+    manifest["source_commit"] = "b" * 40
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert _verify(stage, expected_manifest=digest).startswith("REJECT:")
 
 
 def test_replacement_after_prior_validation_is_rejected_on_recheck(tmp_path):

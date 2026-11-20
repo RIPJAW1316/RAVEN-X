@@ -207,7 +207,7 @@ def _generate_local_tls_material(directory: Path, hosts: list[str],
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="RAVEN-X local server administration")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("bootstrap", "serve", "tls-init", "migrate", "rollback-check"):
+    for command in ("bootstrap", "serve", "tls-init", "migrate", "rollback-check", "gemini-key"):
         item = sub.add_parser(command)
         item.add_argument("--data-dir", type=Path, default=default_data_dir())
         if command == "bootstrap":
@@ -215,6 +215,10 @@ def main(argv=None) -> int:
             item.add_argument("--name", default="RAVEN-X administrator")
             item.add_argument("--organization", required=True)
             item.add_argument("--password-stdin", action="store_true", help=argparse.SUPPRESS)
+        elif command == "gemini-key":
+            item.add_argument("action", choices=["set", "rotate", "status", "delete"],
+                              help="Action: set, rotate, status, or delete Gemini API key")
+            item.add_argument("--key-stdin", action="store_true", help=argparse.SUPPRESS)
         elif command == "tls-init":
             item.add_argument("--host", action="append", default=[], help="LAN IP or DNS name; repeat for each name")
         elif command == "rollback-check":
@@ -302,6 +306,59 @@ def main(argv=None) -> int:
                 print(json.dumps(result, indent=2))
             finally:
                 database.close()
+        elif args.command == "gemini-key":
+            from .infrastructure.security.windows_credentials import (
+                set_gemini_api_key, get_gemini_key_status, delete_gemini_api_key,
+                validate_credential_characters, WindowsCredentialError
+            )
+            if args.action in {"set", "rotate"}:
+                if args.key_stdin:
+                    if sys.stdin.isatty():
+                        raise ValueError("masked key input requires a private pipe")
+                    key = sys.stdin.readline().rstrip("\r\n")
+                    if not key:
+                        raise ValueError("masked key input stream was empty")
+                else:
+                    if not sys.stdin.isatty():
+                        raise ValueError("secure interactive input is unavailable; use a private pipe with --key-stdin")
+                    try:
+                        key = getpass.getpass("Enter Google AI Studio Gemini API Key: ")
+                        confirm = getpass.getpass("Confirm API Key: ")
+                    except Exception as err:
+                        raise ValueError(f"failed to obtain secure input: {err}") from err
+                    if key != confirm:
+                        raise ValueError("API keys did not match")
+                validated = validate_credential_characters(key)
+                try:
+                    set_gemini_api_key(validated)
+                    status = get_gemini_key_status()
+                except WindowsCredentialError as err:
+                    parser.exit(2, f"RAVEN-X: Credential storage error: {err}\n")
+                except Exception as err:
+                    parser.exit(2, f"RAVEN-X: Failed to store credential in Windows Credential Manager: {err}\n")
+                print(json.dumps({
+                    "success": True,
+                    "action": args.action,
+                    "message": "Gemini API key successfully saved to Windows Credential Manager.",
+                    "status": status,
+                }, indent=2))
+            elif args.action == "status":
+                try:
+                    status = get_gemini_key_status()
+                except WindowsCredentialError as err:
+                    parser.exit(2, f"RAVEN-X: Credential storage error: {err}\n")
+                print(json.dumps(status, indent=2))
+            elif args.action == "delete":
+                try:
+                    deleted = delete_gemini_api_key()
+                except WindowsCredentialError as err:
+                    parser.exit(2, f"RAVEN-X: Credential storage error: {err}\n")
+                print(json.dumps({
+                    "success": True,
+                    "deleted": deleted,
+                    "message": "Gemini API key removed from Windows Credential Manager." if deleted else "No key found to delete.",
+                }, indent=2))
+            return 0
         else:
             from .application.ops.listeners import bind_sockets, validated_hosts
             hosts = args.listen_host or [args.host]

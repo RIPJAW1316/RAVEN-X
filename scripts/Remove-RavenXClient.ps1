@@ -126,9 +126,9 @@ try {
         if ($name -eq 'RavenXRuntime') {
             $allowed = '^(Python313-3\.13\.17|python-3\.13\.17-amd64\.zip)$'
         } elseif ($name -eq 'RavenXSetup') {
-            $allowed = '^1\.0\.0-rc\d+-\d{8}-\d{6}-\d+$'
+            $allowed = '^1\.0\.0(?:-rc\d+)?-\d{8}-\d{6}-\d+$'
         } else {
-            $allowed = '^1\.0\.0-rc\d+$'
+            $allowed = '^1\.0\.0(?:-rc\d+)?$'
         }
         $children = @(Get-ChildItem -LiteralPath $parent.FullName -Force)
         $owned = @($children | Where-Object Name -Match $allowed)

@@ -10,6 +10,8 @@ param(
     [switch]$EnableLocalAi = $true,
     [switch]$DisableLocalAi,
     [string]$AiModelId = 'meta-llama-3.1-8b-instruct',
+    [switch]$EnableGeminiDemo,
+    [switch]$ReleasePackage,
     [switch]$LoopbackOnly,
     [switch]$ManagedByLauncher,
     [string]$AdministratorEmail
@@ -20,9 +22,8 @@ if ($ManagedByLauncher) {
     [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 }
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$python = Join-Path $root '.venv-ravenx-313\Scripts\python.exe'
+. (Join-Path $root 'scripts\server-runtime.ps1')
 $data = Join-Path $env:ProgramData ("RAVEN-X\$PilotName-pilot")
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python 3.13 server venv is missing.' }
 if (-not (Test-Path -LiteralPath (Join-Path $root 'frontend\dist\index.html') -PathType Leaf)) {
     throw 'Built portal is missing; run npm run build in frontend first.'
 }
@@ -60,6 +61,17 @@ try {
     }
     Push-Location $root
     $locationPushed = $true
+    $python = Get-RavenXServerPython -Root $root -ReleasePackage:$ReleasePackage
+    if ($EnableGeminiDemo) {
+        $credential = & $python -B -E -s -m backend.cli gemini-key status
+        if ($LASTEXITCODE -ne 0 -or -not (($credential | ConvertFrom-Json).configured)) {
+            throw 'Set the Gemini key under this Windows account before enabling Gemini demo.'
+        }
+        $env:RAVENX_CLOUD_GEMINI_ENABLED = 'true'
+        $env:RAVENX_CLOUD_GEMINI_AUTH_MODE = 'api_key'
+    } elseif ($ManagedByLauncher -or $ReleasePackage) {
+        $env:RAVENX_CLOUD_GEMINI_ENABLED = 'false'
+    }
     if ($EnableLocalAi -and -not $DisableLocalAi) {
         $baseUrl = 'http://127.0.0.1:1234/v1'
         try {

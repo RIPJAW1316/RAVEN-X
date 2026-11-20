@@ -1,10 +1,13 @@
-#define ReleaseVersion "1.0.0-rc11"
+#ifndef ReleaseVersion
+  #define ReleaseVersion "1.0.0"
+#endif
 #ifndef StageRoot
-  #define StageRoot "..\dist\release\RAVEN-X-Agent-1.0.0-rc11"
+  #define StageRoot "..\dist\release\RAVEN-X-Agent-" + ReleaseVersion
 #endif
 #define MainScriptHash GetSHA256OfFile(StageRoot + "\scripts\install-agent.ps1")
 #define WrapperScriptHash GetSHA256OfFile(StageRoot + "\scripts\setup-agent.ps1")
 #define IntegrityScriptHash GetSHA256OfFile(StageRoot + "\scripts\release-integrity.ps1")
+#define PayloadManifestHash GetSHA256OfFile(StageRoot + "\release-manifest.json")
 
 [Setup]
 AppId={{7B08A633-BE31-4490-950A-98C33071D740}
@@ -20,7 +23,10 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=RAVEN-X-Windows-Setup-rc11
+#ifndef OutputBaseFilename
+  #define OutputBaseFilename "RAVEN-X-Windows-Setup-v" + ReleaseVersion
+#endif
+OutputBaseFilename={#OutputBaseFilename}
 Compression=lzma2
 SolidCompression=yes
 Uninstallable=no
@@ -275,7 +281,8 @@ begin
   RunChecked(Ica, AddQuotes(Session + '\connection.json') + ' /setowner *S-1-5-32-544', 'Could not set public settings owner.');
   CheckStageSecurity(Session, Parent, True);
   Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + AddQuotes(Payload + '\scripts\setup-agent.ps1') +
-    ' -ConfigPath ' + AddQuotes(Session + '\connection.json');
+    ' -ConfigPath ' + AddQuotes(Session + '\connection.json') +
+    ' -ExpectedManifestSha256 {#PayloadManifestHash}';
   Token := Trim(TokenPage.Values[0]);
   TokenPage.Values[0] := '';
   WizardForm.StatusLabel.Caption := 'Verifying prerequisites and enrolling this computer. This can take several minutes.';
