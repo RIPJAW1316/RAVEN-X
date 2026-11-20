@@ -179,9 +179,6 @@ def create_tenant_insights_router(dependencies: TenantInsightsDependencies) -> A
         if body.get("demo_id") is not None and (body.get("endpoint_id") is not None or body.get("assessment_ids") is not None):
             raise _error(422, "INVALID_REQUEST", "demo_id is mutually exclusive with endpoint_id and assessment_ids")
 
-        if model_val == "gemini" and body.get("demo_id") != "windows-hardening-v1":
-            raise _error(422, "INVALID_REQUEST", "Cloud model gemini is restricted to the bundled synthetic demo assessment")
-
         principal, context = human
         try:
             result = await asyncio.to_thread(

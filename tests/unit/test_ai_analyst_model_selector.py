@@ -367,6 +367,62 @@ def test_gemini_on_fleet_scope_without_demo_id_fails_closed():
     assert resp.json()["detail"]["code"] == "INVALID_REQUEST"
 
 
+
+@pytest.mark.parametrize("order, expected_provider", [
+    (["f2", "f1"], "google_cloud"),
+    (["f1", "invented"], "offline"),
+])
+def test_opt_in_real_gemini_prioritizes_minimized_tenant_findings(order, expected_provider):
+    outbound = []
+
+    def transport(**request):
+        outbound.append(json.loads(request["body"]))
+        return _make_google_wire_response(order)
+
+    provider = CloudGeminiProvider(
+        CloudGeminiConfig(enabled=True, live_enabled=True, auth_mode="api_key", api_key="test-key"),
+        transport=transport,
+    )
+    world = _world(cloud_provider=provider)
+    org = world.organization.organization_id
+    endpoint = Endpoint(EndpointId.new(), "private-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
+                        created_at=NOW, organization_id=org)
+    world.endpoints.add(endpoint)
+    findings = [
+        {"finding_id": "fw-1", "title": "sensitive-title", "severity": "high",
+         "description": "private-description", "scanner_id": "windows.firewall",
+         "evidence": [{"observed_value": "private-evidence"}]},
+        {"finding_id": "uac-1", "title": "UAC", "severity": "medium",
+         "scanner_id": "windows.uac"},
+    ]
+    result = SimpleNamespace(status="completed", findings=findings, scanner_results=[])
+    world.assessments.items.append(_assessment(endpoint, org, "private-assessment", "completed", NOW,
+                                               result=result))
+    path = f"/api/v1/organizations/{org}/ai/analyze"
+    response = world.client.post(path, json={"model": "gemini", "endpoint_id": str(endpoint.endpoint_id)},
+                                 headers=_headers(world))
+    assert response.status_code == 200, response.text
+    assert len(outbound) == 1
+    prompt = outbound[0]["contents"][0]["parts"][0]["text"]
+    assert json.loads(prompt.split("Findings: ", 1)[1]) == [
+        {"ref": "f1", "check": "windows.firewall", "severity": "high"},
+        {"ref": "f2", "check": "windows.uac", "severity": "medium"},
+    ]
+    data = response.json()
+    assert data["provider"] == expected_provider
+    assert data["fallback_used"] == (expected_provider == "offline")
+    assert data["source"]["assessment_ids"] == ["private-assessment"]
+    assert len(data["plan"]) == 2
+    assert data["plan"][0]["finding_id"] == ("uac-1" if expected_provider == "google_cloud" else "fw-1")
+
+    foreign = Endpoint(EndpointId.new(), "other-pc", PlatformInfo("Windows"), EndpointStatus.ACTIVE,
+                       created_at=NOW, organization_id=world.foreign_organization.organization_id)
+    world.endpoints.add(foreign)
+    response = world.client.post(path, json={"model": "gemini", "endpoint_id": str(foreign.endpoint_id)},
+                                 headers=_headers(world))
+    assert response.status_code == 404
+    assert len(outbound) == 1
+
 def test_cloud_provider_rejects_unauthorized_fixture_id():
     config = CloudGeminiConfig(enabled=True, project="test-project")
     provider = CloudGeminiProvider(config)

@@ -44,11 +44,6 @@ class TenantLocalAnalysisService:
             if demo_id != WINDOWS_HARDENING_DEMO_ID:
                 raise ValueError(f"unsupported demo_id: {demo_id}")
 
-        # Fail closed immediately if cloud model is requested without the allowlisted demo fixture
-        if model == "gemini":
-            if demo_id != WINDOWS_HARDENING_DEMO_ID:
-                raise ValueError("Cloud model gemini is restricted to the bundled synthetic demo assessment")
-
         # Enforce human membership, ai.use and reports.read on both real and demo requests
         decision = self.authorizer.authorize(AuthorizationRequest(
             principal, AuthorizationAction.AI_USE,
@@ -63,6 +58,9 @@ class TenantLocalAnalysisService:
             organization_context=context))
         if not read_decision.allowed:
             raise PermissionError(read_decision.reason_code)
+
+        if model == "gemini" and demo_id is None and not getattr(self.cloud_provider, "live_enabled", False):
+            raise ValueError("Live Gemini analysis is disabled")
 
         if demo_id == WINDOWS_HARDENING_DEMO_ID:
             report = build_synthetic_windows_demo_report()
@@ -153,7 +151,20 @@ class TenantLocalAnalysisService:
         fallback_used = False
         fallback_reason = None
 
-        if not self.cloud_provider or not self.cloud_provider.enabled:
+        if demo_id is None:
+            if findings:
+                try:
+                    candidates = findings[:min(30, self.max_finding_facts)]
+                    categories = [(item["scanner_id"], item["severity"]) for item in candidates]
+                    keys = {f"f{i}": item["finding_key"] for i, item in enumerate(candidates, start=1)}
+                    refs = self.cloud_provider.prioritize_live_findings(categories)
+                    if not isinstance(refs, list) or len(refs) != len(keys) or set(refs) != keys.keys():
+                        raise ValueError("Cloud model returned an invalid finding order")
+                    ranked = [keys[ref] for ref in refs]
+                except Exception:
+                    fallback_used = True
+                    fallback_reason = "Gemini could not prioritize the findings. Try again or use the local model."
+        elif not self.cloud_provider or not self.cloud_provider.enabled:
             fallback_used = True
             fallback_reason = "Gemini cloud demo inference is disabled"
         else:

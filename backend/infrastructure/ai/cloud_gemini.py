@@ -1,10 +1,7 @@
-"""Google Cloud Gemini provider for first-party bundled synthetic Windows demo assessments.
+"""Google Gemini prioritization for the bundled fixture and opted-in assessments.
 
-Restricted to the server-owned 'windows-hardening-v1' fixture. Never accepts
-arbitrary report facts, live endpoint evidence, or customer data. Uses official
-Google Cloud Application Default Credentials (ADC) with per-invocation timeout
-bounds and no process-global socket modification. Default-off, bounded timeout,
-and no automatic retries.
+Live requests contain only temporary references and server-known Windows check
+categories and severities. Credentials are used server-side for bounded requests.
 """
 
 from __future__ import annotations
@@ -17,11 +14,16 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from ...agent.windows_scanners import windows_read_only_scanners
 from ...application.ai.synthetic_demo import (
     CANONICAL_DEMO_GEMINI_ITEMS,
     CANONICAL_DEMO_REFS,
     WINDOWS_HARDENING_DEMO_ID,
 )
+
+LIVE_FINDING_LIMIT = 30
+_SCANNER_IDS = frozenset(scanner.manifest.scanner_id for scanner in windows_read_only_scanners())
+_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
 
 _PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 
@@ -59,6 +61,7 @@ class CloudGeminiConfig:
     location: str = "global"
     model: str = "gemini-3.5-flash-lite"
     timeout_seconds: int = 15
+    live_enabled: bool = False
 
     def __repr__(self) -> str:
         masked_key = "[REDACTED]" if self.api_key else ""
@@ -79,6 +82,10 @@ class CloudGeminiConfig:
         if enabled_text not in {"true", "false", "1", "0", "yes", "no"}:
             raise ValueError("invalid cloud Gemini enabled flag")
 
+        live_text = str(env.get("RAVENX_CLOUD_GEMINI_LIVE_ENABLED", cloud.get("live_enabled", "false"))).lower()
+        if live_text not in {"true", "false", "1", "0", "yes", "no"}:
+            raise ValueError("invalid live Gemini enabled flag")
+
         raw_auth_mode = str(env.get("RAVENX_CLOUD_GEMINI_AUTH_MODE", cloud.get("auth_mode", "adc"))).strip().lower()
         if not raw_auth_mode:
             raw_auth_mode = "adc"
@@ -93,6 +100,7 @@ class CloudGeminiConfig:
         return cls(
             enabled=enabled_text in {"true", "1", "yes"},
             auth_mode=raw_auth_mode,
+            live_enabled=live_text in {"true", "1", "yes"},
             api_key="",
             project=project,
             location=location,
@@ -145,13 +153,14 @@ def _get_adc_bearer_token(timeout_seconds: int = 10, request_factory: Callable |
 
 
 class CloudGeminiProvider:
-    """Provider strictly scoped to the server-owned synthetic Windows demo assessment."""
+    """Order server-owned finding references with Gemini."""
 
     def __init__(self, config: CloudGeminiConfig, *, transport: Callable | None = None,
                  adc_token_provider: Callable[[], str] | None = None,
                  api_key_provider: Callable[[], str | None] | None = None):
         self.config = config
         self.enabled = config.enabled
+        self.live_enabled = config.enabled and config.live_enabled
         self.model = "gemini-3.5-flash-lite"
         self._transport = transport
         self._adc_token_provider = adc_token_provider
@@ -169,6 +178,24 @@ class CloudGeminiProvider:
         if fixture_id != WINDOWS_HARDENING_DEMO_ID:
             raise ValueError(f"Cloud Gemini only supports allowlisted demo fixture '{WINDOWS_HARDENING_DEMO_ID}'")
 
+        items = [{key: item[key] for key in ("ref", "severity", "description")}
+                 for item in CANONICAL_DEMO_GEMINI_ITEMS]
+        return self._prioritize(items, CANONICAL_DEMO_REFS, scope="synthetic Windows findings")
+
+    def prioritize_live_findings(self, categories: list[tuple[str, str]]) -> list[str]:
+        if not self.live_enabled:
+            raise ValueError("Live Gemini analysis is disabled")
+        if not 1 <= len(categories) <= LIVE_FINDING_LIMIT:
+            raise ValueError("Invalid live Gemini finding count")
+        items = [
+            {"ref": f"f{index}",
+             "check": scanner_id if scanner_id in _SCANNER_IDS else "unknown",
+             "severity": severity if severity in _SEVERITIES else "unknown"}
+            for index, (scanner_id, severity) in enumerate(categories, start=1)
+        ]
+        return self._prioritize(items, {item["ref"] for item in items}, scope="Windows security check results")
+
+    def _prioritize(self, findings_payload, expected_refs, *, scope):
         if self.config.auth_mode == "api_key":
             key_candidate = ""
             if self._api_key_provider is not None:
@@ -223,13 +250,8 @@ class CloudGeminiProvider:
         else:
             raise ValueError(f"Unsupported cloud Gemini auth_mode '{self.config.auth_mode}'")
 
-        findings_payload = [
-            {"ref": item["ref"], "severity": item["severity"], "description": item["description"]}
-            for item in CANONICAL_DEMO_GEMINI_ITEMS
-        ]
-
         prompt_text = (
-            "You are a read-only security analyst. Rank these synthetic Windows findings by remediation priority.\n"
+            f"You are a read-only security analyst. Rank these {scope} by remediation priority.\n"
             "Return ONLY a JSON array of the string references ordered from highest to lowest priority.\n"
             "Include every reference exactly once. Do not return Markdown formatting, comments, or explanations.\n"
             f"Findings: {json.dumps(findings_payload, separators=(',', ':'))}"
@@ -271,9 +293,9 @@ class CloudGeminiProvider:
         if len(raw_response) > 65536:
             raise RuntimeError("Cloud Gemini response exceeds bound")
 
-        return self._parse_and_validate_permutation(raw_response)
+        return self._parse_and_validate_permutation(raw_response, expected_refs)
 
-    def _parse_and_validate_permutation(self, raw_bytes: bytes | str) -> list[str]:
+    def _parse_and_validate_permutation(self, raw_bytes: bytes | str, expected_refs) -> list[str]:
         """Parse documented Google generateContent response and validate complete permutation."""
         try:
             data = json.loads(raw_bytes if isinstance(raw_bytes, str) else raw_bytes.decode("utf-8"))
@@ -308,17 +330,17 @@ class CloudGeminiProvider:
         except Exception as err:
             raise ValueError("Cloud Gemini output is not a valid JSON array") from err
 
-        return self._validate_complete_permutation(parsed)
+        return self._validate_complete_permutation(parsed, expected_refs)
 
-    def _validate_complete_permutation(self, refs: Any) -> list[str]:
+    def _validate_complete_permutation(self, refs: Any, expected_refs) -> list[str]:
         if not isinstance(refs, list):
             raise ValueError("output is not a JSON list")
         if not all(isinstance(r, str) for r in refs):
             raise ValueError("output items must all be strings")
-        if len(refs) != len(CANONICAL_DEMO_REFS):
+        if len(refs) != len(expected_refs):
             raise ValueError("Cloud model returned incomplete permutation")
         if len(refs) != len(set(refs)):
             raise ValueError("Cloud model returned duplicate references")
-        if set(refs) != set(CANONICAL_DEMO_REFS):
+        if set(refs) != set(expected_refs):
             raise ValueError("Cloud model returned unknown or invented references")
         return refs

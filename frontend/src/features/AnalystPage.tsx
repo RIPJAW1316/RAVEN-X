@@ -121,15 +121,9 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
     setScopeKey(newScope);
     setResult(null);
     analyze.reset();
-    if (newScope !== "__demo__" && model === "gemini") {
-      setModel("lm_studio");
-    }
   };
 
   const handleModelChange = (newModel: "lm_studio" | "offline" | "gemini") => {
-    if (newModel === "gemini" && scopeKey !== "__demo__") {
-      return;
-    }
     setModel(newModel);
     setResult(null);
     analyze.reset();
@@ -150,9 +144,11 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
   };
 
   return (
-    <Panel title="Local evidence analysis" icon={<Sparkles size={15} />}>
+    <Panel title="Evidence analysis" icon={<Sparkles size={15} />}>
       <p className="panel-note">
-        On-demand interpretation of assessment evidence. Assessment evidence is sent only to the configured runtime. Suggestions require human review.
+        {model === "gemini" && scopeKey !== "__demo__"
+          ? "Gemini receives Windows check categories and severities to prioritize the selected findings."
+          : "Prioritize findings and review each recommendation against the source assessment."}
       </p>
       <AsyncSection loading={report.loading} error={report.error} data={report.data} onRetry={report.reload}>
         {(data) => (
@@ -181,9 +177,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
               >
                 <option value="lm_studio">Local model (LM Studio)</option>
                 <option value="offline">Offline rules (deterministic)</option>
-                <option value="gemini" disabled={scopeKey !== "__demo__"}>
-                  Gemini 3.5 Flash-Lite (Cloud Demo){scopeKey !== "__demo__" ? " (demo only)" : ""}
-                </option>
+                <option value="gemini">Gemini 3.5 Flash-Lite (Google Cloud)</option>
               </select>
             </Field>
 
@@ -215,7 +209,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
               ? result.provider === "offline" || (!result.provider && result.model === "Offline rules")
                 ? "Offline rules"
                 : result.provider === "google_cloud"
-                ? "Gemini 3.5 Flash-Lite (Cloud Demo)"
+                ? "Google Cloud"
                 : "AI advisory"
               : "Analysis unavailable"}
           </Badge>
