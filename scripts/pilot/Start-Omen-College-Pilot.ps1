@@ -36,19 +36,13 @@ $listeners = @('127.0.0.1')
 if ($LoopbackOnly) {
     if ($LabAddress -ne '127.0.0.1') { throw 'Loopback mode requires address 127.0.0.1.' }
 } else {
-    $bytes = $parsed.GetAddressBytes()
-    if ($bytes[0] -ne 10 -and -not ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -and
-        -not ($bytes[0] -eq 192 -and $bytes[1] -eq 168)) { throw 'Select a private LAN IPv4 address.' }
-    $assigned = @(Get-NetIPAddress -IPAddress $LabAddress -AddressFamily IPv4 -ErrorAction Stop)
-    if ($assigned.Count -ne 1) { throw 'Address is not assigned to exactly one Omen interface.' }
-    $profile = Get-NetConnectionProfile -InterfaceIndex $assigned[0].InterfaceIndex -ErrorAction SilentlyContinue
-    if ($null -eq $profile -or $profile.NetworkCategory -ne 'Private') {
-        throw "Select an adapter with a Private Windows network profile. $LabAddress has no Private profile."
+    if ($LabAddress -notin @(& (Join-Path $PSScriptRoot 'Get-OmenLanAddress.ps1'))) {
+        throw "Address $LabAddress is unavailable. Refresh addresses and select a Private LAN or an isolated VirtualBox host-only adapter."
     }
     $listeners += $LabAddress
 }
 if (@(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0) {
-    throw 'The requested port already has a listener.'
+    throw "Port $Port is already in use. If the earlier command-line server is still running, stop it in its own window before starting this profile."
 }
 $tls = Join-Path $data 'tls\server.pem'
 $ca = Join-Path $data 'tls\ca.pem'
@@ -127,13 +121,14 @@ try {
         } finally { $password = $null }
     }
     $hostArgs = @(foreach ($address in $listeners) { '--host'; $address })
-    & $python -B -E -s -m backend.application.ops.listeners --certificate $tls @hostArgs
-    if ($LASTEXITCODE -ne 0) { throw 'Pilot certificate does not cover this address. Choose its original address or create a separate pilot.' }
+    $certificateName = & $python -B -E -s -m backend.application.ops.listeners --select-from (Split-Path $tls) @hostArgs
+    if ($LASTEXITCODE -ne 0) { throw 'No valid profile certificate covers the selected address. Select the original address or provision a matching server certificate under the same CA.' }
+    $tls = Join-Path (Split-Path $tls) $certificateName
     $digest = (Get-FileHash -LiteralPath $ca -Algorithm SHA256).Hash
     Write-Host "Omen portal: https://${LabAddress}:$Port"
     Write-Host "Public CA PEM: $ca"
     Write-Host "Public CA SHA-256: $digest"
-    $serve = @('-B','-E','-s','-m','backend.cli','serve','--data-dir',$data,'--port',$Port)
+    $serve = @('-B','-E','-s','-m','backend.cli','serve','--data-dir',$data,'--cert',$tls,'--port',$Port)
     $serve += @(foreach ($address in $listeners) { '--listen-host'; $address })
     if ($ManagedByLauncher) { $serve += '--stop-on-stdin-eof' }
     & $python @serve

@@ -4,7 +4,9 @@
 
 Use 64-bit Windows and a local administrator account. The ZIP includes Python 3.13, the dependency wheels and the built portal. Setup needs no Node.js or internet access. Download the administrator ZIP and its published checksum from the official GitHub release. The launcher is unsigned.
 
-In **Administrator Windows PowerShell**, from the download directory, verify the ZIP digest and extract it to a new directory under Program Files:
+For a graphical installation, verify the published SHA-256 of **RAVEN-X-Omen-Setup.exe**, run it and approve the Windows administrator prompt. Open **RAVEN-X → Omen Server** from the Start menu. Setup places the same admin ZIP contents in a versioned Program Files directory. The server starts when you click **Start server** in the launcher.
+
+To install the ZIP manually, run the following from the download directory in **Administrator Windows PowerShell**:
 
 ```powershell
 $zip = Get-Item -LiteralPath '.\RAVEN-X-Admin-Portal-v1.0.0.zip'
@@ -21,7 +23,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not set release ownership.' }
 
 1. Open **RAVEN-X-Server.exe** in the extracted directory. Approve the Windows elevation prompt using the account that will run the portal.
 2. Choose the **Pilot profile**. Each profile stores its database and TLS material in `%ProgramData%\RAVEN-X\<profile>-pilot`. Use a new name for a fresh setup. To reopen an existing pilot, choose its original profile and certificate address.
-3. For endpoint enrollment on another computer, select the server's private LAN IPv4 address and leave **Allow LAN clients** checked. The adapter must use the Windows Private profile. For testing on the server itself, clear **Allow LAN clients** to bind only to `127.0.0.1`. Save the address and port printed by the launcher. If LAN traffic is blocked, allow inbound TCP on that port for the Private profile and the local subnet.
+3. For another physical computer, select the address of Omen's trusted Windows Private LAN. For a VirtualBox guest, select the address on its host-only network. The launcher also recognizes a VirtualBox host-only adapter with no Windows network profile and no default route. Leave **Allow LAN clients** checked for either connection. Clear it for local-only testing. Use the HTTPS URL printed under **Client connection**. Any inbound firewall rule should be scoped to the intended interface, address, port and client subnet.
+   The launcher first checks the profile's `tls\server.pem`. It can also use an administrator-provisioned `tls\server-vm.pem` under the same CA with the same server key. If you previously started the server from a terminal, stop that instance with Ctrl+C before using the same profile and port in the launcher.
 4. Choose optional AI providers and click **Start server**. On first start, enter an administrator email and a matching 12–128 character password in the masked dialog. Setup prepares the offline Python environment, then initializes the profile and starts HTTPS.
 5. Wait for **Running** and click **Open portal**. Verify the certificate before signing in. The launcher can export the public CA so an administrator can import it into a trusted root store on authorized admin workstations. Confirm its file SHA-256 against the launcher.
 

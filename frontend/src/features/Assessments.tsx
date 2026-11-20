@@ -319,8 +319,9 @@ function Composer({
               <option value="">Select an endpoint…</option>
               {selectable.map((item) => (
                 <option key={item.endpoint_id} value={item.endpoint_id}>
-                  {item.hostname || shortId(item.endpoint_id)}
+                  {item.hostname ? `${item.hostname} · ` : ""}{shortId(item.endpoint_id)}
                   {item.platform ? ` · ${item.platform}` : ""}
+                  {` · ${item.presence_state}`}
                 </option>
               ))}
             </select>
@@ -374,6 +375,29 @@ function ScannerCollectionBadge({ result }: { result: ScannerResultSummary }) {
   return <Badge tone="critical">COLLECTION_FAILED · Collection status unavailable</Badge>;
 }
 
+function QueuedEndpoint({ organizationId, endpointId, onOpen }: {
+  organizationId: string;
+  endpointId: string;
+  onOpen: () => void;
+}) {
+  const presence = useApi(
+    (signal) => fleet.endpointPresence(organizationId, endpointId, signal),
+    [organizationId, endpointId],
+  );
+  usePolling(presence.reload, 6_000, true);
+  return (
+    <>
+      <p>Waiting for the endpoint agent to pick up this assessment.</p>
+      {presence.data && !presence.error && (
+        <p>Endpoint status · {presence.data.state}. Last seen · {presence.data.last_seen_at
+          ? formatDateTime(presence.data.last_seen_at) : "No contact recorded"}.</p>
+      )}
+      {presence.error && <p>Endpoint presence is currently unavailable.</p>}
+      <button type="button" className="link" onClick={onOpen}>View endpoint</button>
+    </>
+  );
+}
+
 function AssessmentDetailView({
   organizationId,
   assessmentId,
@@ -395,10 +419,12 @@ function AssessmentDetailView({
   );
 
   const live = summary.data ? isActive(summary.data.state) : false;
+  const reloadSummary = summary.reload;
+  const reloadDetail = detail.reload;
   const reloadBoth = useCallback(() => {
-    summary.reload();
-    detail.reload();
-  }, [summary, detail]);
+    reloadSummary();
+    reloadDetail();
+  }, [reloadSummary, reloadDetail]);
   usePolling(reloadBoth, live ? 6_000 : 0, live);
 
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -532,6 +558,9 @@ function AssessmentDetailView({
                     ))}
                   </ul>
                   </>
+                ) : assessment.state === "queued" ? (
+                  <QueuedEndpoint key={`${organizationId}/${assessment.endpoint_id}`} organizationId={organizationId}
+                    endpointId={assessment.endpoint_id} onOpen={() => navigate("fleet", assessment.endpoint_id)} />
                 ) : (
                   <Empty
                     compact

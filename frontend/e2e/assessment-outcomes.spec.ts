@@ -107,6 +107,11 @@ class AssessmentOutcomePortal {
     };
     await this.page.route(`**/assessments/${id}`, (route) => route.fulfill({ json: summary }));
     await this.page.route(`**/assessments/${id}/details`, (route) => route.fulfill({ json: detail }));
+    if (state === "queued") {
+      await this.page.route("**/endpoints/synthetic-endpoint/presence", (route) => route.fulfill({
+        json: { state: "offline", endpoint_id: "synthetic-endpoint", last_seen_at: timestamp },
+      }));
+    }
     if (fixtureResponses) {
       await this.page.route(`**/assessments/${id}/findings/synthetic-occurrence/recurrence`,
         (route) => route.fulfill({ json: {} }));
@@ -132,6 +137,10 @@ test("zero findings preserve incomplete and terminal failure states", async ({ p
   for (const state of ["queued", "running"] as const) {
     await portal.showSyntheticOutcome(state);
     await expect(page.getByText("Findings appear as the agent submits scanner results.", { exact: true })).toBeVisible();
+    if (state === "queued") {
+      await expect(page.getByText(/Endpoint status · offline\. Last seen/)).toBeVisible();
+      await expect(page.getByRole("button", { name: "View endpoint" })).toBeVisible();
+    }
     await expect(page.getByRole("button", { name: "Cancel run", exact: true })).toBeVisible();
   }
   await portal.showSyntheticOutcome("completed");

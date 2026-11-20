@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,9 +250,10 @@ def build_admin_portal_zip(wheel_dir: Path, python_zip: Path, csc_path: Path,
         payload[f"scripts/{script_name}"] = data
 
     # 6b. Pilot lifecycle runner script
-    pilot_script = ROOT / "scripts" / "pilot" / "Start-Omen-College-Pilot.ps1"
-    assert_safe_path(pilot_script)
-    payload["scripts/pilot/Start-Omen-College-Pilot.ps1"] = pilot_script.read_bytes()
+    for name in ("Start-Omen-College-Pilot.ps1", "Get-OmenLanAddress.ps1"):
+        pilot_script = ROOT / "scripts" / "pilot" / name
+        assert_safe_path(pilot_script)
+        payload[f"scripts/pilot/{name}"] = pilot_script.read_bytes()
 
     # 7. Walkthrough & Version
     walkthrough = ROOT / "ADMINISTRATOR_WALKTHROUGH.md"
@@ -484,6 +486,21 @@ def verify_package(zip_path: Path, source_commit: str) -> dict:
     return {"status": "verified", "manifest_entries": len(manifest["files"])}
 
 
+def build_omen_setup(admin_zip: Path, iscc: Path, source_commit: str) -> Path:
+    verify_package(admin_zip, source_commit)
+    with tempfile.TemporaryDirectory(prefix="ravenx-omen-setup-") as stage:
+        with zipfile.ZipFile(admin_zip) as archive:
+            archive.extractall(stage)
+        subprocess.run([
+            str(iscc), "/Qp", f"/DStageRoot={stage}", f"/DReleaseVersion={VERSION}",
+            f"/DRevision={source_commit[:8]}", f"/O{admin_zip.parent.resolve()}",
+            str(ROOT / "scripts" / "RAVEN-X-Omen-Setup.iss"),
+        ], check=True)
+    installer = admin_zip.parent / "RAVEN-X-Omen-Setup.exe"
+    installer.with_suffix(".exe.sha256").write_text(f"{sha256_file(installer)}  {installer.name}\n", encoding="ascii")
+    return installer
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build release packages from a clean Windows checkout.")
     parser.add_argument("--server-wheels", type=Path, required=True)
@@ -517,6 +534,7 @@ def main() -> int:
     print("\n[3/4] Verifying generated release ZIPs...")
     v_admin = verify_package(server_zip, source_commit)
     v_endpoint = verify_package(endpoint_zip, source_commit)
+    print(f"  -> Omen setup application: {build_omen_setup(server_zip, args.iscc, source_commit)}")
     print(f"  -> Admin package: {v_admin['status']} ({v_admin['manifest_entries']} verified files)")
     print(f"  -> Endpoint package: {v_endpoint['status']} ({v_endpoint['manifest_entries']} verified files)")
 

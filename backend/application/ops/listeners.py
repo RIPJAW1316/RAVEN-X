@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import ipaddress
 import argparse
+from datetime import datetime, timezone
 from pathlib import Path
 import socket
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 
 
 def validated_hosts(hosts: list[str], certificate: Path | None) -> tuple[str, ...]:
@@ -72,12 +74,40 @@ def bind_sockets(hosts: tuple[str, ...], port: int) -> list[socket.socket]:
         raise
 
 
+def select_profile_certificate(directory: Path, hosts: list[str]) -> Path:
+    """Select a current leaf issued by this profile's CA for every listener."""
+    validated_hosts(hosts, None)
+    ca = x509.load_pem_x509_certificate((directory / "ca.pem").read_bytes())
+    now = datetime.now(timezone.utc)
+    if not ca.not_valid_before_utc <= now <= ca.not_valid_after_utc:
+        raise ValueError("profile CA is outside its validity period")
+    for name in ("server.pem", "server-vm.pem"):
+        candidate = directory / name
+        try:
+            validated_hosts(hosts, candidate)
+            cert = x509.load_pem_x509_certificate(candidate.read_bytes())
+            cert.verify_directly_issued_by(ca)
+            if cert.not_valid_before_utc <= now <= cert.not_valid_after_utc:
+                return candidate
+        except (FileNotFoundError, ValueError, InvalidSignature):
+            continue
+    raise ValueError("no current server certificate issued by the profile CA covers all listeners")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify explicit RAVEN-X TLS listener addresses")
-    parser.add_argument("--certificate", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--certificate", type=Path)
+    mode.add_argument("--select-from", type=Path)
     parser.add_argument("--host", action="append", required=True)
     args = parser.parse_args()
-    validated_hosts(args.host, args.certificate)
+    try:
+        if args.select_from:
+            print(select_profile_certificate(args.select_from, args.host).name)
+        else:
+            validated_hosts(args.host, args.certificate)
+    except (ValueError, OSError) as error:
+        parser.exit(2, f"{error}\n")
     return 0
 
 

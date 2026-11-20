@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Net.NetworkInformation;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Security.AccessControl;
@@ -80,6 +80,7 @@ internal static class Launcher
         check(scripts);
         check(Path.Combine(scripts, "pilot"));
         check(Path.Combine(scripts, "pilot", "Start-Omen-College-Pilot.ps1"));
+        check(Path.Combine(scripts, "pilot", "Get-OmenLanAddress.ps1"));
         foreach (string file in new[] { "manage-gemini-credentials.ps1", "server-runtime.ps1", "release-integrity.ps1", "managed-python.ps1" })
             check(Path.Combine(scripts, file));
     }
@@ -172,6 +173,7 @@ internal sealed class LauncherForm : Form
     };
     private Process worker;
     private bool stopping, closeWhenStopped;
+    private bool refreshingAddresses;
     private string url, caPath, sha;
 
     internal LauncherForm(string workspace)
@@ -228,7 +230,7 @@ internal sealed class LauncherForm : Form
                 profile.Items.Add(name.Substring(0, name.Length - "-pilot".Length));
             }
         profile.Text = "home";
-        RefreshAddresses();
+        Shown += delegate { RefreshAddresses(); };
         refresh.Click += delegate { RefreshAddresses(); };
         geminiKey.Click += delegate { RunUi(() => Launcher.OpenGeminiKeyPrompt(workspace)); };
         lan.CheckedChanged += delegate { UpdateControls(); };
@@ -274,23 +276,53 @@ internal sealed class LauncherForm : Form
         }
     }
 
-    private void RefreshAddresses()
+    private async void RefreshAddresses()
     {
+        if (refreshingAddresses) return;
+        refreshingAddresses = true;
         var previous = address.SelectedItem as string;
         address.Items.Clear();
-        foreach (var network in NetworkInterface.GetAllNetworkInterfaces()
-            .Where(item => item.OperationalStatus == OperationalStatus.Up))
-            foreach (var entry in network.GetIPProperties().UnicastAddresses)
+        UpdateControls();
+        try
+        {
+            var candidates = await System.Threading.Tasks.Task.Run(() => ReadLanAddresses(workspace));
+            if (IsDisposed) return;
+            address.Items.AddRange(candidates);
+            if (previous != null && address.Items.Contains(previous)) address.SelectedItem = previous;
+            else if (address.Items.Count != 0) address.SelectedIndex = 0;
+            else AppendLog("No eligible LAN address. Use a trusted Private network, a VirtualBox host-only adapter, or clear Allow LAN clients for local testing.");
+        }
+        catch (Exception error) { if (!IsDisposed) AppendLog(error.Message); }
+        finally
+        {
+            refreshingAddresses = false;
+            if (!IsDisposed) UpdateControls();
+        }
+    }
+
+    internal static string[] ReadLanAddresses(string root)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" +
+                Path.Combine(root, "scripts", "pilot", "Get-OmenLanAddress.ps1") + "\"",
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        info.EnvironmentVariables.Remove("PSModulePath");
+        using (var process = Process.Start(info))
+        {
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(20000))
             {
-                byte[] bytes = entry.Address.GetAddressBytes();
-                if (bytes.Length == 4 && (bytes[0] == 10 ||
-                    (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
-                    (bytes[0] == 192 && bytes[1] == 168)) && !address.Items.Contains(entry.Address.ToString()))
-                    address.Items.Add(entry.Address.ToString());
+                process.Kill();
+                throw new TimeoutException("Windows network discovery timed out. Click Refresh addresses to retry.");
             }
-        if (previous != null && address.Items.Contains(previous)) address.SelectedItem = previous;
-        else if (address.Items.Contains("192.168.1.121")) address.SelectedItem = "192.168.1.121";
-        else if (address.Items.Count != 0) address.SelectedIndex = 0;
+            if (process.ExitCode != 0) throw new InvalidOperationException("Windows network discovery failed. " + errors.Result.Trim());
+            return output.Result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(value => { IPAddress ip; return IPAddress.TryParse(value, out ip) && ip.ToString() == value; }).ToArray();
+        }
     }
 
     private void StartPilot()
@@ -406,8 +438,9 @@ internal sealed class LauncherForm : Form
     {
         bool idle = worker == null;
         bool connected = !stopping && status.Text == "Running" && url != null && caPath != null && sha != null;
-        start.Enabled = profile.Enabled = port.Enabled = lan.Enabled = ai.Enabled = gemini.Enabled = idle;
-        address.Enabled = refresh.Enabled = idle && lan.Checked;
+        profile.Enabled = port.Enabled = lan.Enabled = ai.Enabled = gemini.Enabled = idle;
+        start.Enabled = idle && (!lan.Checked || (!refreshingAddresses && address.SelectedItem != null));
+        address.Enabled = refresh.Enabled = idle && lan.Checked && !refreshingAddresses;
         localModel.Enabled = idle && ai.Checked;
         liveGemini.Enabled = idle && gemini.Checked;
         stop.Enabled = !idle && !stopping;
