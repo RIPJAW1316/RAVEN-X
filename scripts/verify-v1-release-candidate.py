@@ -75,7 +75,7 @@ def smoke_admin(root: Path, runtime: Path) -> None:
 $ErrorActionPreference = 'Stop'
 $exe = [Reflection.Assembly]::LoadFrom((Resolve-Path '.\RAVEN-X-Server.exe').Path)
 $pilot = Get-Command '.\scripts\pilot\Start-Omen-College-Pilot.ps1'
-$factory = $exe.GetType('Launcher').GetMethod('PilotStartInfo', 'Static,NonPublic')
+$factory = $exe.GetType('Launcher').GetMethod('PilotStartInfo', [Reflection.BindingFlags]'Static,NonPublic')
 $form = [Activator]::CreateInstance($exe.GetType('LauncherForm'), 'Instance,NonPublic', $null,
                                     [object[]]@((Get-Location).Path), $null)
 try {
