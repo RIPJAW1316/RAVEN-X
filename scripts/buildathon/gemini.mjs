@@ -19,7 +19,7 @@ function literal(value) {
 
 async function rank(offline) {
   const findings = offline.plan.map((item, index) => ({
-    ref: index + 1,
+    ref: "f" + (index + 1),
     check: item.scanner_id,
     severity: item.severity,
   }));
@@ -32,12 +32,13 @@ async function rank(offline) {
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text:
         "Rank these synthetic Windows security findings by remediation priority, highest first. " +
-        "Return each integer reference exactly once as a JSON array. Findings: " + JSON.stringify(findings),
+        "Return each string reference exactly once as a JSON array. Findings: " + JSON.stringify(findings),
       }] }],
       generationConfig: {
         maxOutputTokens: 512,
+        thinkingConfig: { thinkingLevel: "MINIMAL" },
         responseMimeType: "application/json",
-        responseJsonSchema: { type: "array", items: { type: "integer" } },
+        responseJsonSchema: { type: "array", items: { type: "string" } },
       },
     }),
   };
@@ -46,11 +47,12 @@ async function rank(offline) {
   if (candidate?.finishReason !== "STOP") throw new Error("Incomplete Gemini response");
   const text = candidate.content?.parts?.find((part) => !part.thought && typeof part.text === "string")?.text;
   const order = JSON.parse(text);
+  const byRef = new Map(findings.map((item, index) => [item.ref, offline.plan[index]]));
   if (!Array.isArray(order) || order.length !== findings.length || new Set(order).size !== findings.length ||
-      order.some((ref) => !Number.isInteger(ref) || ref < 1 || ref > findings.length)) {
+      order.some((ref) => !byRef.has(ref))) {
     throw new Error("Gemini returned an invalid ranking");
   }
-  const plan = order.map((ref, index) => ({ ...offline.plan[ref - 1], priority: index + 1 }));
+  const plan = order.map((ref, index) => ({ ...byRef.get(ref), priority: index + 1 }));
   const priorities = plan.map((item) =>
     "**Priority " + item.priority + " · " + literal(item.title) + "** (" +
     literal(item.severity.toUpperCase()) + ") · " + literal(item.hostname) +
@@ -73,11 +75,11 @@ async function rank(offline) {
 }
 
 async function generateRanking(request) {
-  for (const model of [MODEL, MODEL, BACKUP_MODEL]) {
+  for (const model of [MODEL, BACKUP_MODEL, MODEL]) {
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
     let response;
     try {
-      response = await fetch(url, { ...request, signal: AbortSignal.timeout(5_000) });
+      response = await fetch(url, { ...request, signal: AbortSignal.timeout(8_500) });
     } catch {
       continue;
     }
