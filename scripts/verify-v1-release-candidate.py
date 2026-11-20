@@ -87,7 +87,7 @@ $probeInfo.RedirectStandardOutput = $true
 $probeInfo.Arguments = '-NoProfile -NonInteractive -Command "if ([Console]::ReadLine() -eq ''start'') { $p = Start-Process ping.exe -ArgumentList ''-n 100 127.0.0.1'' -PassThru -WindowStyle Hidden; [Console]::WriteLine($p.Id); $p.WaitForExit() }"'
 $probe = [Diagnostics.Process]::Start($probeInfo)
 try {
-    $jobType.GetMethod('Attach', 'Instance,NonPublic').Invoke($job, [object[]]@($probe))
+    $jobType.GetMethod('Attach', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($job, [object[]]@($probe))
     $probe.StandardInput.WriteLine('start')
     $read = $probe.StandardOutput.ReadLineAsync()
     if (!$read.Wait(10000) -or !$read.Result) { throw 'Worker did not start its child' }
