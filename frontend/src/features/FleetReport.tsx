@@ -55,8 +55,9 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
               clearReview();
               setModel(event.target.value as ReportReviewModel);
             }}>
-              {!hostedDemo && <option value="lm_studio">Local model (LM Studio)</option>}
-              <option value="gemini">{hostedDemo ? "Gemini (recorded sample)" : "Gemini (Google Cloud)"}</option>
+              {hostedDemo ? <option value="offline">Offline rules</option>
+                : <option value="lm_studio">Local model (LM Studio)</option>}
+              <option value="gemini">{hostedDemo ? "Gemini (prepared review)" : "Gemini (Google Cloud)"}</option>
             </select>
           </Field>
           <button type="button" className="primary" disabled={busy || report.loading} onClick={() => review.run()}>
@@ -69,7 +70,7 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
             <Printer size={14} /> Print review
           </button>
           {model === "gemini" && <p className="panel-note">{hostedDemo
-            ? "The report uses the recorded analysis of this synthetic assessment."
+            ? "This sample report includes a prepared Gemini review. Open AI Analyst for a new live ranking."
             : "Gemini receives check categories and severities to prioritize findings."}</p>}
         </div>
         {review.error && <ErrorState error={review.error} />}

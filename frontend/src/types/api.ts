@@ -209,7 +209,7 @@ export interface LocalAnalysis {
   coverage?: { scanned_endpoints: number; included_endpoints: number; included_findings: number; truncated: boolean };
 }
 
-export type ReportReviewModel = "lm_studio" | "gemini";
+export type ReportReviewModel = "lm_studio" | "gemini" | "offline";
 
 export interface ReviewedEvidenceReport {
   report: FleetEvidenceReport;

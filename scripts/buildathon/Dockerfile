@@ -1,6 +1,6 @@
 FROM node:24-alpine
 WORKDIR /app
-COPY server.mjs demo.json *.pdf fleet.csv ./
+COPY server.mjs gemini.mjs demo.json *.pdf fleet.csv ./
 COPY portal/ ./portal/
 USER node
 ENV PORT=8080

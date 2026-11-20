@@ -107,6 +107,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
   const [scopeKey, setScopeKey] = useState("");
   const [model, setModel] = useState<"lm_studio" | "offline" | "gemini">(hostedDemo ? "gemini" : "lm_studio");
   const [result, setResult] = useState<LocalAnalysis | null>(null);
+  const [showGemmaSetup, setShowGemmaSetup] = useState(false);
   const report = useApi((signal) => insights.fleetReport(organizationId, signal), [organizationId]);
   const analyze = useMutation((options: Parameters<typeof insights.analyze>[1]) =>
     insights.analyze(organizationId, options, true),
@@ -121,17 +122,23 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
   const handleScopeChange = (newScope: string) => {
     setScopeKey(newScope);
     setResult(null);
+    setShowGemmaSetup(false);
     analyze.reset();
   };
 
   const handleModelChange = (newModel: "lm_studio" | "offline" | "gemini") => {
     setModel(newModel);
     setResult(null);
+    setShowGemmaSetup(false);
     analyze.reset();
   };
 
   const runAnalysis = async () => {
     setResult(null);
+    if (hostedDemo && model === "lm_studio") {
+      setShowGemmaSetup(true);
+      return;
+    }
     const selection = {
       model,
       ...(scopeKey === "__demo__"
@@ -148,7 +155,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
     <Panel title="Evidence analysis" icon={<Sparkles size={15} />}>
       <p className="panel-note">
         {hostedDemo
-          ? "Compare the Gemini result recorded for this sample with the deterministic offline plan."
+          ? "Gemini ranks findings live for your selected synthetic machine or the whole sample fleet."
           : model === "gemini" && scopeKey !== "__demo__"
           ? "Gemini receives Windows check categories and severities to prioritize the selected findings."
           : "Prioritize findings and review each recommendation against the source assessment."}
@@ -168,7 +175,7 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
                     {endpoint.hostname} · {endpoint.scan_status}
                   </option>
                 ))}
-                <option value="__demo__">Bundled synthetic Windows demo</option>
+                {!hostedDemo && <option value="__demo__">Bundled synthetic Windows demo</option>}
               </select>
             </Field>
 
@@ -178,9 +185,9 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
                 onChange={(event) => handleModelChange(event.target.value as "lm_studio" | "offline" | "gemini")}
                 disabled={analyze.busy}
               >
-                {!hostedDemo && <option value="lm_studio">Local model (LM Studio)</option>}
+                <option value="lm_studio">{hostedDemo ? "Gemma 3 4B (local via LM Studio)" : "Local model (LM Studio)"}</option>
                 <option value="offline">Offline rules (deterministic)</option>
-                <option value="gemini">{hostedDemo ? "Gemini (recorded sample)" : "Gemini 3.5 Flash-Lite (Google Cloud)"}</option>
+                <option value="gemini">{hostedDemo ? "Gemini Flash-Lite (Google Cloud)" : "Gemini 3.5 Flash-Lite (Google Cloud)"}</option>
               </select>
             </Field>
 
@@ -197,6 +204,13 @@ function LocalAnalysisPanel({ organizationId, navigate }: {
         )}
       </AsyncSection>
       {analyze.error && <ErrorState error={analyze.error} />}
+      {showGemmaSetup && (
+        <div className="analysis-result" role="status">
+          <h3>Run Gemma on your machine</h3>
+          <p>Install LM Studio, download and load Gemma 3 4B, then start its local server on port 1234.
+            Open your local RAVEN-X portal and choose <strong>Local model (LM Studio)</strong> to test it.</p>
+        </div>
+      )}
       {result && (
         <div className="analysis-result" aria-live="polite">
           <Badge

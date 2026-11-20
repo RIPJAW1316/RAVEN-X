@@ -283,7 +283,7 @@ function Workspace({ onSignOut }: { onSignOut: () => void }) {
           >
             {hostedDemo && (
               <p className="panel-note">
-                Buildathon prototype · Synthetic Windows evidence. Explore the assessment, AI Analyst, and PDF report.
+                Buildathon prototype · Five synthetic Windows systems. Explore their assessments, run AI Analyst, and download a PDF report.
               </p>
             )}
             {organizations.error ? (

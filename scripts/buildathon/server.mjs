@@ -1,10 +1,11 @@
 import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
+import { analyzeWithGemini } from "./gemini.mjs";
 
 // The deployment context contains only synthetic data and the production UI.
 const data = JSON.parse(await readFile(new URL("./demo.json", import.meta.url), "utf8"));
 const namespace = "/api/v1/organizations/" + data.org;
-const machine = data.machine.endpoint_id;
+const machineIds = new Set(data.machines.map((item) => item.endpoint_id));
 const portal = new URL("./portal/", import.meta.url);
 const files = new Map([["/", await readFile(new URL("index.html", portal))]]);
 for (const filename of await readdir(new URL("assets/", portal))) {
@@ -14,10 +15,10 @@ for (const filename of await readdir(new URL("assets/", portal))) {
   }
 }
 const pdfs = new Map();
-for (const scope of ["fleet", "machine"]) {
+for (const scope of ["fleet", ...machineIds]) {
   for (const model of ["gemini", "offline"]) {
-    const filename = `${scope}-${model}.pdf`;
-    pdfs.set(filename, await readFile(new URL(filename, import.meta.url)));
+    const name = `${scope}-${model}`;
+    pdfs.set(name, await readFile(new URL(name + ".pdf", import.meta.url)));
   }
 }
 const csv = await readFile(new URL("fleet.csv", import.meta.url));
@@ -31,7 +32,7 @@ function json(req, res, body, status = 200) {
   return respond(req, res, status, "application/json; charset=utf-8", JSON.stringify(body));
 }
 
-async function requestModel(req) {
+async function readAnalysisRequest(req) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -41,9 +42,11 @@ async function requestModel(req) {
   }
   try {
     const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (!input || (input.endpoint_id && input.endpoint_id !== machine) ||
-        (input.demo_id && input.demo_id !== "windows-hardening-v1")) return null;
-    return input.model === "gemini" || input.model === "offline" ? input.model : null;
+    if (!input || !["gemini", "offline"].includes(input.model) ||
+        Object.keys(input).some((key) => !["model", "endpoint_id", "demo_id"].includes(key)) ||
+        ("endpoint_id" in input && !machineIds.has(input.endpoint_id)) ||
+        ("demo_id" in input && (input.demo_id !== "windows-hardening-v1" || "endpoint_id" in input))) return null;
+    return { model: input.model, scope: input.endpoint_id ?? "fleet" };
   } catch {
     return null;
   }
@@ -71,10 +74,17 @@ async function handle(req, res) {
   if (get && path === "/fleet/endpoints") {
     const q = (url.searchParams.get("q") || "").toLowerCase();
     const presence = url.searchParams.getAll("presence");
-    const include = data.machine.hostname.toLowerCase().includes(q) &&
-      (presence.length === 0 || presence.includes(data.machine.presence_state));
-    const items = include ? [data.machine] : [];
-    return json(req, res, { items, limit: 40, offset: 0, returned: items.length, total: items.length });
+    const items = data.machines.filter((item) => item.hostname.toLowerCase().includes(q) &&
+      (presence.length === 0 || presence.includes(item.presence_state)));
+    const sort = url.searchParams.get("sort") || "hostname";
+    const direction = url.searchParams.get("direction") === "desc" ? -1 : 1;
+    if (["hostname", "platform", "presence_state", "last_seen_at"].includes(sort)) {
+      items.sort((a, b) => direction * a[sort].localeCompare(b[sort]));
+    }
+    const limit = Math.max(1, Math.min(200, Number.parseInt(url.searchParams.get("limit"), 10) || 40));
+    const offset = Math.max(0, Number.parseInt(url.searchParams.get("offset"), 10) || 0);
+    const page = items.slice(offset, offset + limit);
+    return json(req, res, { items: page, limit, offset, returned: page.length, total: items.length });
   }
   if (get && path === "/reports/fleet.csv") {
     return respond(req, res, 200, "text/csv; charset=utf-8", csv,
@@ -82,22 +92,25 @@ async function handle(req, res) {
   }
   if (get && path && Object.hasOwn(data.routes, path)) return json(req, res, data.routes[path]);
   if (req.method === "POST" && path === "/ai/analyze") {
-    const model = await requestModel(req);
-    return model ? json(req, res, data.analyses[model]) : json(req, res, { detail: "Unknown sample or model" }, 400);
+    const request = await readAnalysisRequest(req);
+    if (!request) return json(req, res, { detail: "Unknown sample or model" }, 400);
+    const offline = data.analyses[request.scope];
+    const analysis = request.model === "gemini" ? await analyzeWithGemini(request.scope, offline) : offline;
+    return json(req, res, analysis);
   }
   if (req.method === "POST" && path === "/reports/review") {
     const endpoint = url.searchParams.get("endpoint_id");
     const model = url.searchParams.get("model");
-    if ((endpoint && endpoint !== machine) || !Object.hasOwn(data.review, model)) {
+    if ((endpoint !== null && !machineIds.has(endpoint)) || !["offline", "gemini"].includes(model)) {
       return json(req, res, { detail: "Unknown sample or model" }, 400);
     }
-    const scope = endpoint ? "machine" : "fleet";
+    const scope = endpoint ?? "fleet";
     if (url.searchParams.get("format") === "pdf") {
-      return respond(req, res, 200, "application/pdf", pdfs.get(`${scope}-${model}.pdf`),
+      return respond(req, res, 200, "application/pdf", pdfs.get(`${scope}-${model}`),
         { "Content-Disposition": `attachment; filename="ravenx-synthetic-${scope}.pdf"` });
     }
-    const report = data.routes[endpoint ? `/endpoints/${machine}/report` : "/reports/fleet"];
-    return json(req, res, { report, review: data.review[model] });
+    const report = data.routes[endpoint ? `/endpoints/${endpoint}/report` : "/reports/fleet"];
+    return json(req, res, { report, review: data.reviews[scope][model] });
   }
   return json(req, res, { detail: "This operation is unavailable in the public prototype." }, 404);
 }
