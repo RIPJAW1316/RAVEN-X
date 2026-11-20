@@ -76,6 +76,26 @@ $ErrorActionPreference = 'Stop'
 $exe = [Reflection.Assembly]::LoadFrom((Resolve-Path '.\RAVEN-X-Server.exe').Path)
 $pilot = Get-Command '.\scripts\pilot\Start-Omen-College-Pilot.ps1'
 $factory = $exe.GetType('Launcher').GetMethod('PilotStartInfo', [Reflection.BindingFlags]'Static,NonPublic')
+# Exercise the actual Windows job object with an unrelated, disposable worker tree.
+$jobType = $exe.GetType('PilotJob')
+$job = [Activator]::CreateInstance($jobType, $true)
+$probeInfo = [Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
+$probeInfo.UseShellExecute = $false
+$probeInfo.CreateNoWindow = $true
+$probeInfo.RedirectStandardInput = $true
+$probeInfo.RedirectStandardOutput = $true
+$probeInfo.Arguments = '-NoProfile -NonInteractive -Command "if ([Console]::ReadLine() -eq ''start'') { $p = Start-Process ping.exe -ArgumentList ''-n 100 127.0.0.1'' -PassThru -WindowStyle Hidden; [Console]::WriteLine($p.Id); $p.WaitForExit() }"'
+$probe = [Diagnostics.Process]::Start($probeInfo)
+try {
+    $jobType.GetMethod('Attach', 'Instance,NonPublic').Invoke($job, [object[]]@($probe))
+    $probe.StandardInput.WriteLine('start')
+    $read = $probe.StandardOutput.ReadLineAsync()
+    if (!$read.Wait(10000) -or !$read.Result) { throw 'Worker did not start its child' }
+    $descendant = Get-Process -Id ([int]$read.Result)
+    $job.Dispose()
+    if (!$probe.WaitForExit(5000) -or !$descendant.WaitForExit(5000)) { throw 'Orphaned server worker' }
+    $descendant.Dispose()
+} finally { $job.Dispose(); $probe.StandardInput.Close(); $probe.Dispose() }
 $form = [Activator]::CreateInstance($exe.GetType('LauncherForm'), 'Instance,NonPublic', $null,
                                     [object[]]@((Get-Location).Path), $null)
 try {
@@ -95,7 +115,8 @@ try {
             $argsLine = $factory.Invoke($null, $argList).Arguments
             if (($argsLine.Contains(' -EnableGeminiLive') -ne ($useCloud -and $allowLive)) -or
                 ($argsLine.Contains(' -EnableGeminiDemo') -ne ($useCloud -and !$allowLive)) -or
-                !$argsLine.Contains(' -AiModelId google/gemma-3-4b') -or !$argsLine.Contains(' -ReleasePackage')) {
+                !$argsLine.Contains(' -AiModelId google/gemma-3-4b') -or !$argsLine.Contains(' -ReleasePackage') -or
+                !$argsLine.Contains(' -WaitForLauncherJob')) {
                 throw 'Incorrect provider arguments in release launcher'
             }
         }

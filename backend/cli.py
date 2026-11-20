@@ -389,6 +389,7 @@ def main(argv=None) -> int:
                 config = uvicorn.Config("backend.api.main:app", workers=1,
                                         ssl_certfile=str(cert) if cert else None,
                                         ssl_keyfile=str(key) if key else None,
+                                        timeout_graceful_shutdown=15 if args.stop_on_stdin_eof else None,
                                         proxy_headers=False, server_header=False)
                 sockets = bind_sockets(tuple(hosts), args.port)
                 try:

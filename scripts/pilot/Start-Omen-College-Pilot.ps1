@@ -15,12 +15,16 @@ param(
     [switch]$ReleasePackage,
     [switch]$LoopbackOnly,
     [switch]$ManagedByLauncher,
+    [switch]$WaitForLauncherJob,
     [string]$AdministratorEmail
 )
 $ErrorActionPreference = 'Stop'
 if ($ManagedByLauncher) {
     [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+}
+if ($WaitForLauncherJob -and [Console]::In.ReadLine() -cne 'RAVENX_START') {
+    throw 'Launcher closed before the server worker was attached.'
 }
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 . (Join-Path $root 'scripts\server-runtime.ps1')

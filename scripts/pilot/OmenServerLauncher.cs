@@ -4,6 +4,8 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Security.AccessControl;
@@ -104,7 +106,7 @@ internal static class Launcher
         {
             FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
             Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script +
-                "\" -ManagedByLauncher -PilotName " + pilot + " -LabAddress " + address + " -Port " + port +
+                "\" -ManagedByLauncher -WaitForLauncherJob -PilotName " + pilot + " -LabAddress " + address + " -Port " + port +
                 (lan ? "" : " -LoopbackOnly") + (ai ? " -AiModelId " + localModel : " -DisableLocalAi") +
                 (gemini ? (liveGemini ? " -EnableGeminiLive" : " -EnableGeminiDemo") : "") + ReleaseSwitch() +
                 (email == null ? "" : " -AdministratorEmail \"" + email + "\""),
@@ -142,6 +144,53 @@ internal static class Launcher
     }
 }
 
+// Closing the last handle terminates only this launcher's pilot and descendants.
+internal sealed class PilotJob : IDisposable
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicLimits
+    {
+        internal long ProcessTime, JobTime;
+        internal uint Flags;
+        internal UIntPtr MinWorkingSet, MaxWorkingSet;
+        internal uint ActiveProcessLimit;
+        internal UIntPtr Affinity;
+        internal uint Priority, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ExtendedLimits
+    {
+        internal BasicLimits Limits;
+        internal ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes;
+        internal UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+    }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateJobObject(IntPtr attributes, string name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(SafeFileHandle job, int infoClass, ref ExtendedLimits limits, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
+    private readonly SafeFileHandle handle;
+    internal PilotJob()
+    {
+        handle = CreateJobObject(IntPtr.Zero, null);
+        if (handle.IsInvalid) throw new System.ComponentModel.Win32Exception();
+        var limits = new ExtendedLimits();
+        limits.Limits.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if (!SetInformationJobObject(handle, 9, ref limits, (uint)Marshal.SizeOf(limits)))
+        {
+            var error = new System.ComponentModel.Win32Exception();
+            handle.Dispose();
+            throw error;
+        }
+    }
+    internal void Attach(Process process)
+    {
+        if (!AssignProcessToJobObject(handle, process.Handle)) throw new System.ComponentModel.Win32Exception();
+    }
+    public void Dispose() { handle.Dispose(); }
+}
+
 internal sealed class LauncherForm : Form
 {
     private readonly string workspace;
@@ -172,6 +221,9 @@ internal sealed class LauncherForm : Form
         Font = new Font("Consolas", 9), BackColor = Color.FromArgb(242, 246, 249)
     };
     private Process worker;
+    private PilotJob workerJob;
+    private readonly Timer stopDeadline = new Timer { Interval = 30000 };
+    private bool canForceStop;
     private bool stopping, closeWhenStopped;
     private bool refreshingAddresses;
     private string url, caPath, sha;
@@ -240,7 +292,17 @@ internal sealed class LauncherForm : Form
             UpdateControls();
         };
         start.Click += delegate { StartPilot(); };
-        stop.Click += delegate { StopPilot(); };
+        stop.Click += delegate { if (canForceStop) ConfirmForceStop(); else StopPilot(); };
+        stopDeadline.Tick += delegate
+        {
+            stopDeadline.Stop();
+            if (worker == null || !stopping) return;
+            canForceStop = true;
+            status.Text = "Shutdown is taking longer than expected";
+            UpdateControls();
+            if (closeWhenStopped) ConfirmForceStop();
+        };
+        Disposed += delegate { stopDeadline.Dispose(); };
         portal.Click += delegate { OpenPortal("/"); };
         enrollment.Click += delegate { OpenPortal("/#/enrollment"); };
         fleet.Click += delegate { OpenPortal("/#/fleet"); };
@@ -346,20 +408,35 @@ internal sealed class LauncherForm : Form
                 lan.Checked, ai.Checked, localModel.Text.Trim(), gemini.Checked, liveGemini.Checked, email), EnableRaisingEvents = true };
             child.OutputDataReceived += (sender, e) => ShowLine(child, e.Data, true);
             child.ErrorDataReceived += (sender, e) => ShowLine(child, e.Data, false);
+            var job = new PilotJob();
+            bool started = false;
             child.Exited += (sender, e) =>
                 System.Threading.ThreadPool.QueueUserWorkItem(delegate
                 {
-                    child.WaitForExit();
+                    job.Dispose();
+                    if (worker == child) child.WaitForExit();
                     if (!IsDisposed) BeginInvoke((Action)(() => FinishPilot(child)));
                 });
-            try { child.Start(); }
+            try
+            {
+                child.Start();
+                started = true;
+                job.Attach(child);
+                // The runner waits for this line before it can spawn descendants.
+                byte[] line = Encoding.ASCII.GetBytes("RAVENX_START\n");
+                child.StandardInput.BaseStream.Write(line, 0, line.Length);
+                child.StandardInput.BaseStream.Flush();
+            }
             catch
             {
                 status.Text = "Start failed";
+                job.Dispose();
+                if (started) child.StandardInput.Close();
                 child.Dispose();
                 throw;
             }
             worker = child;
+            workerJob = job;
             child.BeginOutputReadLine();
             child.BeginErrorReadLine();
             UpdateControls();
@@ -382,9 +459,24 @@ internal sealed class LauncherForm : Form
         if (worker == null || stopping) return;
         stopping = true;
         status.Text = "Stopping…";
+        stopDeadline.Start();
         UpdateControls();
         try { worker.StandardInput.Close(); }
         catch (IOException) { }
+    }
+
+    private void ConfirmForceStop()
+    {
+        if (workerJob == null || !canForceStop) return;
+        if (MessageBox.Show(this, "The server is still shutting down. End its remaining workers now? Active requests may be interrupted.",
+            Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+        {
+            if (workerJob == null) return;
+            workerJob.Dispose();
+            canForceStop = false;
+            status.Text = "Ending server workers…";
+            UpdateControls();
+        }
     }
 
     private void FinishPilot(Process child)
@@ -392,8 +484,11 @@ internal sealed class LauncherForm : Form
         if (worker != child) return;
         int exitCode = child.ExitCode;
         AppendLog("Pilot process exited with code " + exitCode + ".");
-        status.Text = exitCode == 0 ? "Stopped" : "Start or server failed";
+        status.Text = stopping || exitCode == 0 ? "Stopped" : "Start or server failed";
         worker = null;
+        workerJob = null;
+        stopDeadline.Stop();
+        canForceStop = false;
         stopping = false;
         url = caPath = sha = null;
         child.Dispose();
@@ -443,7 +538,8 @@ internal sealed class LauncherForm : Form
         address.Enabled = refresh.Enabled = idle && lan.Checked && !refreshingAddresses;
         localModel.Enabled = idle && ai.Checked;
         liveGemini.Enabled = idle && gemini.Checked;
-        stop.Enabled = !idle && !stopping;
+        stop.Enabled = !idle && (!stopping || canForceStop);
+        stop.Text = canForceStop ? "Force stop" : "Stop server";
         portal.Enabled = fleet.Enabled = enrollment.Enabled = copy.Enabled = saveCa.Enabled = connected;
         string text = connected ? "HTTPS URL: " + url + "\r\nPublic CA SHA-256: " + sha + "\r\nCA file: " + caPath :
             "Connection details appear once the server is running.";
@@ -470,6 +566,7 @@ internal sealed class LauncherForm : Form
     {
         if (worker == null) return;
         e.Cancel = true;
+        if (canForceStop) { closeWhenStopped = true; ConfirmForceStop(); return; }
         if (stopping || MessageBox.Show(this, "Stop the pilot and close the launcher?", Text,
             MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
         {

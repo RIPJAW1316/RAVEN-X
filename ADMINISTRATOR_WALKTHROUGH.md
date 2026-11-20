@@ -28,6 +28,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not set release ownership.' }
 4. Choose optional AI providers and click **Start server**. On first start, enter an administrator email and a matching 12–128 character password in the masked dialog. Setup prepares the offline Python environment, then initializes the profile and starts HTTPS.
 5. Wait for **Running** and click **Open portal**. Verify the certificate before signing in. The launcher can export the public CA so an administrator can import it into a trusted root store on authorized admin workstations. Confirm its file SHA-256 against the launcher.
 
+Use **Stop server** to release the port and profile before switching launchers. If shutdown takes over 30 seconds, the app offers **Force stop**. Confirming ends that launcher's worker processes and can interrupt active requests.
+
 ## Gemini and local AI
 
 To set or rotate your Gemini key, click **Set Gemini key…**. Enter the key twice at the local masked prompt, then close the prompt window. The key remains in Windows Credential Manager for this Windows account on this PC. Use the same account to start the launcher after logging in or rebooting.
