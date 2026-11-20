@@ -63,6 +63,9 @@ def test_launcher_bootstrap_reads_password_only_from_stdin(tmp_path, monkeypatch
     from io import StringIO
 
     password = "Test-only pipe password! ä"
+    # Restore the process environment after exercising the CLI in-process.
+    monkeypatch.setenv("RAVENX_DATABASE_PATH", "")
+    monkeypatch.setenv("RAVENX_ENABLE_LEGACY_ROUTES", "false")
     monkeypatch.setattr("backend.cli.prepare_data_dir", lambda path: path)
     monkeypatch.setattr("backend.cli.sys.stdin", StringIO(password + "\n"))
     monkeypatch.setattr("backend.cli.getpass.getpass", lambda _: pytest.fail("prompt opened"))

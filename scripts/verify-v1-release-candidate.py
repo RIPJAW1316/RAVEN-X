@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -43,6 +44,9 @@ def stat_is_link(info: zipfile.ZipInfo) -> bool:
 
 
 def run(*argv, cwd, env=None) -> str:
+    if Path(argv[0]) == POWERSHELL:
+        env = {name: value for name, value in (os.environ if env is None else env).items()
+               if name.upper() != "PSMODULEPATH"}
     result = subprocess.run([str(arg) for arg in argv], cwd=cwd, env=env,
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=210)
     if result.returncode:
@@ -53,7 +57,6 @@ def run(*argv, cwd, env=None) -> str:
 def verify_bindings(stage: Path, source_commit: str) -> None:
     manifest = (stage / "release-manifest.json").read_bytes()
     digest = hashlib.sha256(manifest).hexdigest()
-    import json
     if json.loads(manifest)["source_commit"] != source_commit:
         raise ValueError("Endpoint installer stage has different source provenance")
     quoted = str(stage).replace("'", "''")

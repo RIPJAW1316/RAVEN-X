@@ -126,14 +126,16 @@ internal static class Launcher
         VerifyReleaseHome(root);
 #endif
         string script = Path.Combine(root, "scripts", "manage-gemini-credentials.ps1");
-        using (var process = Process.Start(new ProcessStartInfo
+        var info = new ProcessStartInfo
         {
             FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
             Arguments = "-NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File \"" + script +
                 "\" -Action Set" + ReleaseSwitch(),
             WorkingDirectory = root,
-            UseShellExecute = true
-        })) { }
+            UseShellExecute = false
+        };
+        info.EnvironmentVariables.Remove("PSModulePath");
+        using (var process = Process.Start(info)) { }
     }
 }
 
