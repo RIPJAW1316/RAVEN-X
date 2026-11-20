@@ -15,7 +15,6 @@ sys.path.insert(0, str(ROOT))
 
 from backend.application.ai.local_analysis import TenantLocalAnalysisService
 from backend.application.ai.synthetic_demo import build_synthetic_windows_demo_report
-from backend.application.reporting.fleet_pdf import render_fleet_pdf
 
 
 def extra_finding(scanner, rule, title, severity, source, observed):
@@ -175,7 +174,6 @@ def build_machine(org, scanner_ids, sample, stamp):
 
 def stage(args):
     report, fleet_rows, routes = build_fixture(datetime.now(timezone.utc))
-    reviews = {}
     analyses = {}
     reports = {"fleet": report}
     for endpoint in report["endpoints"]:
@@ -192,47 +190,23 @@ def stage(args):
         routes[f"/endpoints/{endpoint_id}/report"] = machine_report
 
     service = TenantLocalAnalysisService(None, None, None)
-    prepared = json.loads(args.report_ranking.read_text(encoding="utf-8")) if args.report_ranking else None
     for scope, item in reports.items():
         source = {
             "organization_id": item["organization_id"], "assessment_ids": item["scope"]["assessment_ids"],
             "endpoint_ids": [endpoint["endpoint_id"] for endpoint in item["endpoints"]],
             "report_generated_at": item["generated_at"],
         }
-        analysis = service._analyze_report(item, source, model="offline")
-        analyses[scope] = analysis
-        offline_review = {
-            "status": analysis["status"], "model": analysis["model"], "provider": analysis["provider"],
-            "note": "Prepared evidence review using offline rules. Open AI Analyst to run live Gemini.",
-            "finding_count": len(analysis["plan"]), "priorities": analysis["plan"],
-            "unverified": analysis["blind_spots"], "unverified_count": len(analysis["blind_spots"]),
-        }
-        reviews[scope] = {"offline": offline_review, "gemini": {
-            **offline_review, "note": "Prepared Gemini review unavailable. Showing offline rules.",
-        }}
-        if prepared:
-            keyed = {row["finding_key"]: row for row in analysis["plan"]}
-            if scope == "fleet" and (prepared["model"] != "gemini-3.5-flash-lite" or
-                                      sorted(prepared["keys"]) != sorted(keyed)):
-                raise ValueError("Prepared Gemini ranking must contain all sample findings exactly once.")
-            priorities = [keyed[key] for key in prepared["keys"] if key in keyed]
-            reviews[scope]["gemini"] = {
-                **offline_review, "model": prepared["model"], "provider": "google_cloud",
-                "note": "Prepared with Gemini for this sample. Open AI Analyst to generate a new live ranking.",
-                "priorities": priorities,
-            }
+        analyses[scope] = service._analyze_report(item, source, model="offline")
     data = {"org": report["organization_id"], "machines": fleet_rows, "routes": routes,
-            "analyses": analyses, "reviews": reviews}
+            "analyses": analyses}
 
     args.output.mkdir()
     shutil.copytree(args.frontend, args.output / "portal")
     templates = ROOT / "scripts/buildathon"
-    for filename in ("server.mjs", "gemini.mjs", "Dockerfile"):
+    for filename in ("server.mjs", "gemini.mjs", "reviews.mjs", "render_pdf.py", "Dockerfile"):
         shutil.copyfile(templates / filename, args.output / filename)
+    shutil.copyfile(ROOT / "backend/application/reporting/fleet_pdf.py", args.output / "fleet_pdf.py")
     (args.output / "demo.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    for scope, item in reports.items():
-        for model, review in reviews[scope].items():
-            (args.output / f"{scope}-{model}.pdf").write_bytes(render_fleet_pdf(item, review=review))
     with (args.output / "fleet.csv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(["Scope", "Device", "Platform", "Evidence coverage", "Findings"])
@@ -252,5 +226,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frontend", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--report-ranking", type=Path)
     stage(parser.parse_args())

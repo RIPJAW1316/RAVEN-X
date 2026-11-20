@@ -213,10 +213,13 @@ export type ReportReviewModel = "lm_studio" | "gemini" | "offline";
 
 export interface ReviewedEvidenceReport {
   report: FleetEvidenceReport;
+  review_id?: string;
   review: {
     status: "available" | "unavailable";
     model: string | null;
     provider: "lm_studio" | "google_cloud" | "offline" | null;
+    generated_at?: string;
+    executive_summary?: string;
     note: string;
     finding_count: number;
     priorities: Pick<FixPlanItem, "finding_key" | "title" | "severity" | "hostname" | "assessment_id" | "action" | "rationale">[];

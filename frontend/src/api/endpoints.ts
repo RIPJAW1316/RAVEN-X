@@ -56,9 +56,9 @@ export const insights = {
     request<ReviewedEvidenceReport>(org(id) + "/reports/review", {
       method: "POST", query: { model, endpoint_id: endpointId },
     }),
-  reviewedPdf: (id: string, model: ReportReviewModel, endpointId?: string) =>
+  reviewedExport: (id: string, model: ReportReviewModel, endpointId?: string, format = "pdf", reviewId?: string) =>
     requestBlob(org(id) + "/reports/review", {
-      method: "POST", query: { model, endpoint_id: endpointId, format: "pdf" },
+      method: "POST", query: { model, endpoint_id: endpointId, format, review_id: reviewId },
     }),
   fleetReport: (id: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/reports/fleet`, { signal }),
   endpointReport: (id: string, endpointId: string, signal?: AbortSignal) => request<FleetEvidenceReport>(`${org(id)}/endpoints/${encodeURIComponent(endpointId)}/report`, { signal }),

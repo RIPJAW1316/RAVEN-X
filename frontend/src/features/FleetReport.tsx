@@ -17,6 +17,7 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
     : insights.fleetReport(organizationId, signal), [organizationId, endpointId]);
   const [model, setModel] = useState<ReportReviewModel>(hostedDemo ? "gemini" : "lm_studio");
   const [reviewed, setReviewed] = useState<ReviewedEvidenceReport | null>(null);
+  const [exporting, setExporting] = useState<"pdf" | "json" | "csv" | null>(null);
   const review = useMutation(async () => {
     setReviewed(null);
     setReviewed(await insights.reviewReport(organizationId, model, endpointId));
@@ -26,16 +27,25 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
     downloadBlob(result.blob, "ravenx-fleet-report.csv");
     return true;
   });
-  const pdf = useMutation(async () => {
-    const result = await insights.reviewedPdf(organizationId, model, endpointId);
-    downloadBlob(result.blob, result.filename ?? `ravenx-${endpointId ? "machine" : "fleet"}-reviewed-report.pdf`);
-    return true;
+  const exportReview = useMutation(async (format: "pdf" | "json" | "csv") => {
+    setExporting(format);
+    try {
+      let snapshot = reviewed;
+      if (hostedDemo && !snapshot) {
+        snapshot = await insights.reviewReport(organizationId, model, endpointId);
+        setReviewed(snapshot);
+      }
+      const result = await insights.reviewedExport(organizationId, model, endpointId, format, snapshot?.review_id);
+      downloadBlob(result.blob, result.filename ?? `ravenx-${endpointId ? "machine" : "fleet"}-reviewed-report.${format}`);
+    } finally {
+      setExporting(null);
+    }
   });
-  const busy = review.busy || pdf.busy;
+  const busy = review.busy || exportReview.busy;
   const clearReview = () => {
     setReviewed(null);
     review.reset();
-    pdf.reset();
+    exportReview.reset();
   };
   return <Panel className="print-report" title={endpointId ? "Machine evidence report" : "Consolidated fleet report"} icon={<FileText size={15} />}
     actions={<button type="button" className="ghost small" disabled={busy} onClick={() => { clearReview(); report.reload(); }}><RefreshCw size={14} /> Refresh</button>}>
@@ -57,28 +67,38 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
             }}>
               {hostedDemo ? <option value="offline">Offline rules</option>
                 : <option value="lm_studio">Local model (LM Studio)</option>}
-              <option value="gemini">{hostedDemo ? "Gemini (prepared review)" : "Gemini (Google Cloud)"}</option>
+              <option value="gemini">{hostedDemo ? "Gemini (live)" : "Gemini (Google Cloud)"}</option>
             </select>
           </Field>
           <button type="button" className="primary" disabled={busy || report.loading} onClick={() => review.run()}>
             <Sparkles size={15} /> {review.busy ? "Reviewing evidence…" : "Review evidence"}
           </button>
-          <button type="button" className="ghost" disabled={busy || report.loading} onClick={() => pdf.run()}>
-            <Download size={14} /> {pdf.busy ? "Reviewing and preparing PDF…" : "Download PDF"}
+          <button type="button" className="ghost" disabled={busy || report.loading} onClick={() => exportReview.run("pdf")}>
+            <Download size={14} /> {exporting === "pdf" ? "Preparing PDF…" : "Download PDF"}
           </button>
           <button type="button" className="ghost" disabled={!reviewed || busy} onClick={() => window.print()}>
             <Printer size={14} /> Print review
           </button>
-          {model === "gemini" && <p className="panel-note">{hostedDemo
-            ? "This sample report includes a prepared Gemini review. Open AI Analyst for a new live ranking."
+          {model === "gemini" && <p className="panel-note" role="status">{hostedDemo
+            ? busy && !reviewed ? "Gemini is reviewing the selected sample evidence…"
+              : "Gemini reviews the selected sample evidence. Downloads include the summary, priorities, and source assessments."
             : "Gemini receives check categories and severities to prioritize findings."}</p>}
         </div>
         {review.error && <ErrorState error={review.error} />}
-        {pdf.error && <ErrorState error={pdf.error} />}
+        {exportReview.error && <ErrorState error={exportReview.error} />}
         {reviewed && <ReportReview review={reviewed.review} navigate={navigate} />}
         <div className="page-actions report-actions">
-          <button type="button" className="ghost" onClick={() => downloadReport(data)}><Download size={14} /> Export evidence JSON</button>
-          {!endpointId && <button type="button" className="ghost" disabled={csv.busy} onClick={() => csv.run()}><Download size={14} /> Export CSV</button>}
+          {hostedDemo ? <>
+            <button type="button" className="ghost" disabled={busy} onClick={() => exportReview.run("json")}>
+              <Download size={14} /> {exporting === "json" ? "Preparing JSON…" : "Download reviewed JSON"}
+            </button>
+            <button type="button" className="ghost" disabled={busy} onClick={() => exportReview.run("csv")}>
+              <Download size={14} /> {exporting === "csv" ? "Preparing CSV…" : "Download reviewed CSV"}
+            </button>
+          </> : <>
+            <button type="button" className="ghost" onClick={() => downloadReport(data)}><Download size={14} /> Export evidence JSON</button>
+            {!endpointId && <button type="button" className="ghost" disabled={csv.busy} onClick={() => csv.run()}><Download size={14} /> Export CSV</button>}
+          </>}
         </div>
         {csv.error && <ErrorState error={csv.error} />}
         {data.endpoints.length === 0 ? <Empty title="No machines registered" detail="Enroll and approve a Windows agent to begin collecting evidence." /> :
@@ -128,6 +148,11 @@ function ReportReview({ review, navigate }: {
       <Badge tone={ai ? "info" : "warn"}>{provider}</Badge>
     </div>
     <p className="panel-note">{ai && review.model && <>{review.model} · </>}{review.note}</p>
+    {review.generated_at && <p className="panel-note">Review generated {formatDateTime(review.generated_at)}</p>}
+    {review.executive_summary && <>
+      <h4>Executive summary</h4>
+      <p>{review.executive_summary}</p>
+    </>}
     {review.priorities.length > 0 && <>
       <h4>Priority findings <small>{review.priorities.length} of {review.finding_count}</small></h4>
       <ol className="report-priorities">

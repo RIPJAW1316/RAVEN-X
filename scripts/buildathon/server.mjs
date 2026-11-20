@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { analyzeWithGemini } from "./gemini.mjs";
+import { getReview, reportCsv, reportPdf } from "./reviews.mjs";
 
 // The deployment context contains only synthetic data and the production UI.
 const data = JSON.parse(await readFile(new URL("./demo.json", import.meta.url), "utf8"));
@@ -12,13 +13,6 @@ for (const filename of await readdir(new URL("assets/", portal))) {
   if (/^[A-Za-z0-9_.-]+\.(css|js)$/.test(filename)) {
     const path = "assets/" + filename;
     files.set("/" + path, await readFile(new URL(path, portal)));
-  }
-}
-const pdfs = new Map();
-for (const scope of ["fleet", ...machineIds]) {
-  for (const model of ["gemini", "offline"]) {
-    const name = `${scope}-${model}`;
-    pdfs.set(name, await readFile(new URL(name + ".pdf", import.meta.url)));
   }
 }
 const csv = await readFile(new URL("fleet.csv", import.meta.url));
@@ -101,16 +95,24 @@ async function handle(req, res) {
   if (req.method === "POST" && path === "/reports/review") {
     const endpoint = url.searchParams.get("endpoint_id");
     const model = url.searchParams.get("model");
-    if ((endpoint !== null && !machineIds.has(endpoint)) || !["offline", "gemini"].includes(model)) {
-      return json(req, res, { detail: "Unknown sample or model" }, 400);
+    const format = url.searchParams.get("format");
+    if ((endpoint !== null && !machineIds.has(endpoint)) || !["offline", "gemini"].includes(model) ||
+        ![null, "pdf", "json", "csv"].includes(format)) {
+      return json(req, res, { detail: "Unknown sample, model, or export format" }, 400);
     }
     const scope = endpoint ?? "fleet";
-    if (url.searchParams.get("format") === "pdf") {
-      return respond(req, res, 200, "application/pdf", pdfs.get(`${scope}-${model}`),
-        { "Content-Disposition": `attachment; filename="ravenx-synthetic-${scope}.pdf"` });
-    }
     const report = data.routes[endpoint ? `/endpoints/${endpoint}/report` : "/reports/fleet"];
-    return json(req, res, { report, review: data.reviews[scope][model] });
+    const snapshot = await getReview(scope, model, report, data.analyses[scope], url.searchParams.get("review_id"));
+    if (!snapshot) return json(req, res, { detail: "Gemini is temporarily unavailable. Retry Gemini or select Offline rules." }, 503);
+    if (!format) return json(req, res, snapshot);
+    const headers = { "Content-Disposition": `attachment; filename="ravenx-synthetic-${scope}-${model}.${format}"` };
+    if (format === "json") {
+      return respond(req, res, 200, "application/json; charset=utf-8", JSON.stringify(snapshot, null, 2), headers);
+    }
+    if (format === "csv") return respond(req, res, 200, "text/csv; charset=utf-8", reportCsv(snapshot), headers);
+    const pdf = await reportPdf(snapshot);
+    if (!pdf) return json(req, res, { detail: "The PDF renderer is busy. Try downloading again shortly." }, 503);
+    return respond(req, res, 200, "application/pdf", pdf, headers);
   }
   return json(req, res, { detail: "This operation is unavailable in the public prototype." }, 404);
 }

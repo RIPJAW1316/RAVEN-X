@@ -83,6 +83,10 @@ def render_fleet_pdf(report, *, review=None):
         if review["provider"] in {"lm_studio", "google_cloud"} and review["model"]:
             provider = f"{provider} ({review['model']})"
         story.extend([paragraph(provider, "Heading4"), paragraph(review["note"])])
+        if review.get("generated_at"):
+            story.append(paragraph(f"Review generated {timestamp(review['generated_at'])}"))
+        if review.get("executive_summary"):
+            story.extend([paragraph("Executive summary", "Heading3"), paragraph(review["executive_summary"])])
         if review["priorities"]:
             shown = len(review["priorities"])
             story.append(paragraph(f"Priority findings ({shown} of {review['finding_count']})", "Heading3"))
