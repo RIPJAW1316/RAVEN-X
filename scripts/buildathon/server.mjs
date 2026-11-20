@@ -57,7 +57,7 @@ async function handle(req, res) {
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
   const url = new URL(req.url, "http://localhost");
   const get = req.method === "GET" || req.method === "HEAD";
-  if (get && url.pathname === "/healthz") return json(req, res, { status: "ready", mode: "synthetic-demo" });
+  if (get && url.pathname === "/health") return json(req, res, { status: "ready", mode: "synthetic-demo" });
   if (get && url.pathname === "/api/v1/auth/organizations") {
     return json(req, res, [{ organization_id: data.org, name: "RAVEN-X · Buildathon demo", membership_id: "demo" }]);
   }
