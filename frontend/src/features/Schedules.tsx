@@ -24,7 +24,8 @@ import {
 } from "../components/ui";
 import { useApi, useMutation } from "../hooks/useApi";
 import { DASH, formatDateTime, formatRelative, shortId, titleCase } from "../lib/format";
-import { DEFAULT_SCANNER_IDS, KNOWN_SCANNERS, scannerName } from "../lib/scanners";
+import { ScannerPicker } from "../components/ScannerPicker";
+import { DEFAULT_SCANNER_IDS, scannerName } from "../lib/scanners";
 import type { Schedule, ScheduleStatus } from "../types/api";
 
 const DAY_LABEL = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -465,7 +466,7 @@ function ScheduleComposer({
       </Field>
 
       <Field label={targetKind === "endpoint_group" ? "Group" : "Scope"}>
-        <select value={reference} onChange={(event) => setReference(event.target.value)}>
+        <select aria-label={targetKind === "endpoint_group" ? "Group" : "Scope"} value={reference} onChange={(event) => setReference(event.target.value)}>
           <option value="">Select…</option>
           {options.map((option) => {
             const id =
@@ -486,28 +487,7 @@ function ScheduleComposer({
         </p>
       )}
 
-      <div className="scanner-picker">
-        <span className="field-label">Scanners</span>
-        <div className="chip-row">
-          {KNOWN_SCANNERS.map((scanner) => (
-            <button
-              key={scanner.scanner_id}
-              type="button"
-              aria-pressed={scanners.includes(scanner.scanner_id)}
-              className={scanners.includes(scanner.scanner_id) ? "chip active" : "chip"}
-              onClick={() =>
-                setScanners((current) =>
-                  current.includes(scanner.scanner_id)
-                    ? current.filter((id) => id !== scanner.scanner_id)
-                    : [...current, scanner.scanner_id],
-                )
-              }
-            >
-              {scanner.name}
-            </button>
-          ))}
-        </div>
-      </div>
+      <ScannerPicker selected={scanners} onChange={setScanners} />
 
       {create.error && <ErrorState error={create.error} />}
 

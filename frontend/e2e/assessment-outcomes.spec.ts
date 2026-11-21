@@ -509,11 +509,11 @@ test("Fix Issues exports a safe local script and portable HTML", async ({ page }
   expect(document).not.toContain("<script>");
 });
 
-test("assessment picker dispatches only the checks selected inside scanner domains", async ({ page }) => {
+test("assessment picker dispatches only the checks selected inside scanner domains", async ({ page }, testInfo) => {
   test.skip(!fixtureResponses, "Presentation fixture");
   await new AssessmentOutcomePortal(page).signIn();
   await page.route("**/fleet/endpoints?**", route => route.fulfill({ json: {
-    items: [{ endpoint_id: "fixture-machine", hostname: "Lab VM", platform: "Windows", lifecycle_status: "active" }],
+    items: [{ endpoint_id: "fixture-machine", hostname: "Lab VM", platform: "Windows", lifecycle_status: "active", presence_state: "online" }],
     total: 1,
   } }));
   const payloads: unknown[] = [];
@@ -531,23 +531,83 @@ test("assessment picker dispatches only the checks selected inside scanner domai
   await page.getByRole("button", { name: "New assessment", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "New assessment" });
   await dialog.getByLabel("Target endpoint").selectOption("fixture-machine");
-  await expect(dialog.getByText("24 of 39 selected")).toBeVisible();
-  await dialog.getByRole("button", { name: "Full Windows scan" }).click();
-  await expect(dialog.getByText("39 of 39 selected")).toBeVisible();
-  await dialog.getByRole("button", { name: "Clear selection" }).click();
-  await expect(dialog.getByRole("button", { name: "Dispatch assessment" })).toBeDisabled();
+  const library = dialog.getByRole("region", { name: "Scan library" });
+  const template = (name: string) => library.getByRole("button", { name, exact: true });
+  const submit = dialog.getByRole("button", { name: "Dispatch assessment" });
+  const search = library.getByRole("searchbox");
+  await expect(library.getByRole("status")).toContainText("24 of 39 selected");
+  await expect(template("Windows baseline")).toHaveAttribute("aria-pressed", "true");
+  await expect(library.getByRole("region", { name: "Security domains" }).getByRole("button")).toHaveCount(6);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({ path: testInfo.outputPath("scan-library-desktop.png") });
 
-  await dialog.getByText("Network & remote access", { exact: true }).click();
-  const network = dialog.getByRole("group", { name: "Network & remote access" });
-  await network.getByRole("button", { name: "SMB Client Signing" }).click();
-  await dialog.getByText("Audit & logging", { exact: true }).click();
-  const audit = dialog.getByRole("group", { name: "Audit & logging" });
-  await audit.getByRole("button", { name: "Windows Security Event Log" }).click();
-  await expect(dialog.getByText("2 of 39 selected")).toBeVisible();
-  await dialog.getByRole("button", { name: "Dispatch assessment" }).click();
+  await template("Full Windows scan").click();
+  await expect(library.getByRole("status")).toContainText("39 of 39 selected");
+  await template("Quick scan").focus();
+  await page.keyboard.press("Enter");
+  await expect(library.getByRole("status")).toContainText("4 of 39 selected");
+  await search.fill("SMB Client Signing");
+  await expect(template("Network & remote access")).toBeVisible();
+  await expect(template("Identity & access")).toHaveCount(0);
+  await template("Network & remote access").click();
+  await search.fill("nothing-matches-this");
+  await expect(library.getByText("No templates match your search")).toBeVisible();
+  await template("Reset filters").click();
+  await expect(template("Network & remote access")).toHaveAttribute("aria-pressed", "true");
+
+  await template("Individual checks").click();
+  const network = library.getByRole("group", { name: "Network & remote access" });
+  await expect(network.getByRole("checkbox", { checked: false })).toHaveCount(0);
+  await template("Clear selection").click();
+  await expect(submit).toBeDisabled();
+  await search.fill("SMB Client Signing");
+  await network.getByRole("button", { name: "Select matching" }).click();
+  await expect(library.getByRole("status")).toContainText("1 of 39 selected");
+  await search.fill("");
+  await library.getByLabel("Security domain", { exact: true }).selectOption("Audit & logging");
+  await library.getByRole("checkbox", { name: "Windows Security Event Log" }).check();
+  await expect(library.getByRole("status")).toContainText("Custom selection");
+  await expect(library.getByRole("status")).toContainText("2 of 39 selected");
+  await submit.click();
   await expect(dialog.getByText("Fixture dispatch captured")).toBeVisible();
   expect(payloads).toEqual([{ endpoint_id: "fixture-machine",
     scanner_ids: ["windows.smb-client-signing", "windows.security-event-log"] }]);
+});
+
+test("scheduled assessments use the same templates on a narrow screen", async ({ page }, testInfo) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await page.addInitScript(() => localStorage.setItem("ravenx.appearance", "light"));
+  await new AssessmentOutcomePortal(page).signIn();
+  await page.route("**/endpoint-groups", route => route.fulfill({ json: [{ group_id: "fixture-group", name: "Office" }] }));
+  await page.route("**/fleet-scopes", route => route.fulfill({ json: [] }));
+  const payloads: { scanner_ids: string[]; target: unknown }[] = [];
+  await page.route("**/assessment-schedules", route => {
+    if (route.request().method() === "POST") payloads.push(route.request().postDataJSON());
+    return route.fulfill({ json: route.request().method() === "POST" ? {} : [] });
+  });
+  await page.getByRole("link", { name: "Schedules", exact: true }).click();
+  await page.getByRole("button", { name: "New schedule", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "New assessment schedule" });
+  await dialog.getByLabel("Name", { exact: true }).fill("Weekly log review");
+  await dialog.getByLabel("Group", { exact: true }).selectOption("fixture-group");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await dialog.getByRole("button", { name: "Audit & logging", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("4 of 39 selected");
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const close = dialog.getByRole("button", { name: "Close", exact: true });
+  await expect(close).toBeInViewport();
+  expect(await close.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await dialog.getByRole("button", { name: "Templates", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("scan-library-mobile.png") });
+  await dialog.getByRole("button", { name: "Create schedule" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(payloads).toHaveLength(1);
+  expect(payloads[0].target).toEqual({ type: "endpoint_group", reference_id: "fixture-group" });
+  expect(payloads[0].scanner_ids).toEqual(["windows.audit", "windows.powershell-script-block-logging",
+    "windows.powershell-module-logging", "windows.security-event-log"]);
 });
 
 test("posture with unknown evidence and a paginated printable machine report", async ({ page }, testInfo) => {

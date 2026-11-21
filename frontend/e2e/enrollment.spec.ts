@@ -78,6 +78,28 @@ test("real API: one-time secret, pending approval, revocation and no fabricated 
   await page.getByRole("button", { name: "Analyze evidence", exact: true }).click();
   await expect(page.getByText("Analysis unavailable", { exact: true })).toBeVisible();
   await expect(page.getByText(/There is no completed scan evidence/)).toBeVisible();
+  // Bring this synthetic endpoint online, then verify the exact work an agent receives.
+  const observed = new Date().toISOString();
+  const heartbeat = await request.post("/api/v1/agent/messages", { headers: agentHeaders, data: {
+    message_id: randomUUID(), message_type: "agent.heartbeat", protocol_version: "1.0",
+    endpoint_id: grant.endpoint_id, timestamp: observed, correlation_id: null, nonce: randomUUID(),
+    payload: { endpoint_id: grant.endpoint_id, observed_at: observed, agent_version: "test", protocol_version: "1.0" },
+  } });
+  expect(heartbeat.ok()).toBe(true);
+  await page.goto(`/#/fleet/${grant.endpoint_id}`);
+  await page.getByRole("button", { name: "Run assessment" }).click();
+  const dispatch = page.getByRole("dialog", { name: "Dispatch assessment" });
+  await dispatch.getByRole("button", { name: "Identity & access", exact: true }).click();
+  await dispatch.getByRole("button", { name: "Individual checks" }).click();
+  await dispatch.getByRole("checkbox", { name: "Automatic Logon" }).uncheck();
+  await dispatch.getByRole("button", { name: /Dispatch .*scanner/ }).click();
+  await expect(page).toHaveURL(/#\/assessments\/[^/]+$/);
+  const poll = await request.post("/api/v1/agent/work", { headers: agentHeaders });
+  expect(poll.ok()).toBe(true);
+  const work = (await poll.json()).message.payload;
+  expect(work.assessment_id).toBe(new URL(page.url()).hash.split("/").pop());
+  expect([...work.scanner_ids].sort()).toEqual(["windows.admin-accounts", "windows.guest",
+    "windows.password-policy", "windows.uac", "windows.wdigest-policy"]);
   await page.goto(`/#/fleet/${grant.endpoint_id}`);
   await expect(page.getByRole("button", { name: "Revoke", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Revoke", exact: true }).click();

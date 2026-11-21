@@ -48,7 +48,7 @@ import { DASH, formatDateTime, formatDuration, formatRelative, shortId } from ".
 import { DEFAULT_SCANNER_IDS, scannerName } from "../lib/scanners";
 import { hostedDemo } from "../lib/hostedDemo";
 import type { Assessment, AssessmentState, FindingDetail, ScannerResultSummary } from "../types/api";
-import { ScannerPicker } from "./Fleet";
+import { ScannerPicker } from "../components/ScannerPicker";
 import { AnalystPanel } from "./Analyst";
 
 export function Assessments({
@@ -312,7 +312,7 @@ function Composer({
         />
       ) : (
         <>
-          <Field label="Target endpoint" hint="Only active endpoints can receive work.">
+          <Field label="Target endpoint" hint="The agent collects the selected checks on its next poll.">
             <select
               value={endpointId}
               onChange={(event) => setEndpointId(event.target.value)}
@@ -323,18 +323,13 @@ function Composer({
                 <option key={item.endpoint_id} value={item.endpoint_id}>
                   {item.hostname ? `${item.hostname} · ` : ""}{shortId(item.endpoint_id)}
                   {item.platform ? ` · ${item.platform}` : ""}
-                  {` · ${item.presence_state}`}
+                  {item.presence_state ? ` · ${item.presence_state}` : ""}
                 </option>
               ))}
             </select>
           </Field>
 
           <ScannerPicker selected={scanners} onChange={setScanners} />
-
-          <p className="panel-note">
-            The assessment is queued as durable work. The agent receives it on its next outbound
-            poll — Raven-X never opens a connection to the endpoint.
-          </p>
 
           {create.error && <ErrorState error={create.error} />}
 
