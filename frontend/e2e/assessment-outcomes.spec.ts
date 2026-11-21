@@ -677,3 +677,139 @@ test("posture with unknown evidence and a paginated printable machine report", a
   await expect(page.getByText("Compliance snapshot exports")).toBeHidden();
   await page.pdf({ path: testInfo.outputPath("machine-report.pdf"), format: "A4" });
 });
+
+test("themes, WCAG contrast, responsive widths, and 200% zoom stay crisp with zero overflow", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await page.route("**/assessment-schedules", (route) => route.fulfill({ json: [{
+    schedule_id: "sched-qa-1", name: "Nightly Windows Baseline", status: "active",
+    scanner_ids: ["windows.firewall", "windows.uac", "windows.smb"],
+    recurrence: { frequency: "daily", interval: 1, hour: 2, minute: 0, days_of_week: [], timezone: "UTC" },
+    target: { type: "endpoint_group", reference_id: "grp-1", endpoint_ids: [] },
+    target_endpoint_ids: [], next_run_at: timestamp, last_run_at: timestamp, overlap_policy: "skip",
+  }] }));
+  await page.route("**/auth/me", (route) => route.fulfill({
+    json: { user_id: "usr-1", email: "qa@example.invalid", display_name: "QA", status: "active" },
+  }));
+  await page.route(`**/organizations/${organizationId}`, (route) => route.fulfill({
+    json: { organization_id: organizationId, name: "Synthetic browser fixture", status: "active", created_at: timestamp, updated_at: timestamp },
+  }));
+  await page.route(`**/organizations/${organizationId}/memberships`, (route) => route.fulfill({ json: [] }));
+
+  const portal = new AssessmentOutcomePortal(page);
+  await portal.signIn();
+
+  for (const theme of ["dark", "light"] as const) {
+    if (theme === "light") {
+      await page.getByRole("link", { name: "Settings", exact: true }).click();
+      await page.getByText("Light", { exact: true }).click();
+      await page.getByRole("link", { name: "Command Center", exact: true }).click();
+    }
+    await expect(page.getByRole("heading", { name: "Command Center", exact: true })).toBeVisible();
+    const themeState = await page.evaluate(() => ({
+      theme: document.documentElement.dataset.theme,
+      scheme: getComputedStyle(document.documentElement).colorScheme,
+      meta: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.content,
+    }));
+    expect(themeState.theme).toBe(theme);
+    expect(themeState.scheme).toContain(theme);
+    expect(themeState.meta).toBe(theme === "dark" ? "#0d1014" : "#f6f7f9");
+
+    const ratios = await page.evaluate(() => {
+      const parse = (s: string) => {
+        const m = s.match(/rgba?\((\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?)(?:,\s*(\d+(?:\.\d+)?))?\)/);
+        return m ? [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? 1 : Number(m[4])] : null;
+      };
+      const blend = (f: number[], b: number[]) => [
+        f[0] * f[3] + b[0] * (1 - f[3]), f[1] * f[3] + b[1] * (1 - f[3]), f[2] * f[3] + b[2] * (1 - f[3]), 1,
+      ];
+      const lum = ([r, g, b]: number[]) => {
+        const c = [r, g, b].map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+      };
+      const bgOf = (el: Element) => {
+        const chain: number[][] = [];
+        for (let n: Element | null = el; n; n = n.parentElement) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c && c[3] > 0) chain.push(c);
+        }
+        const hi = el.querySelector(":scope > .selection-highlight");
+        if (hi) {
+          const hc = parse(getComputedStyle(hi).backgroundColor);
+          if (hc && hc[3] > 0) chain.unshift(hc);
+        }
+        let acc = [0, 0, 0, 1];
+        for (let i = chain.length - 1; i >= 0; i--) acc = chain[i][3] === 1 ? chain[i] : blend(chain[i], acc);
+        return acc;
+      };
+      return [".page-heading h1", ".eyebrow", ".panel-note", ".page-actions .primary", ".nav.active"].map((sel) => {
+        const el = document.querySelector(sel)!;
+        const fg = parse(getComputedStyle(el).color)!;
+        const bg = bgOf(el);
+        const l1 = lum(fg[3] < 1 ? blend(fg, bg) : fg);
+        const l2 = lum(bg);
+        return { sel, ratio: (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05) };
+      });
+    });
+    for (const sample of ratios) {
+      expect(sample.ratio, `${theme} contrast for ${sample.sel}`).toBeGreaterThanOrEqual(4.5);
+    }
+
+    for (const vp of [
+      { width: 1440, height: 900 },
+      { width: 768, height: 900 },
+      { width: 390, height: 844 },
+      { width: 720, height: 450 },
+    ]) {
+      await page.setViewportSize(vp);
+      await page.goto("/#/schedules");
+      await expect(page.getByText("Nightly Windows Baseline")).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        `${theme} schedules overflow at ${vp.width}x${vp.height}`,
+      ).toBe(true);
+    }
+    await page.setViewportSize({ width: 1280, height: 720 });
+  }
+});
+
+test("mobile overlays stack above chrome and reduced motion keeps overlays fade-only", async ({ page }) => {
+  test.skip(!fixtureResponses, "Presentation fixture");
+  await page.route("**/assessments", (route) => route.fulfill({ json: [] }));
+  await page.route("**/fleet/endpoints?**", (route) => route.fulfill({
+    json: { items: [{ endpoint_id: "ep-1", hostname: "HOST-01", lifecycle_status: "active", presence_state: "online" }], total: 1 },
+  }));
+  const portal = new AssessmentOutcomePortal(page);
+  await portal.signIn();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await portal.showSyntheticOutcome("completed", true, [{ scanner_id: "windows.uac", status: "success", error: null, finding_count: 1 }]);
+  await page.getByRole("button", { name: /Synthetic evidence finding/ }).click();
+  const drawer = page.getByRole("dialog", { name: "Synthetic evidence finding" });
+  await expect(drawer).toBeVisible();
+  const drawerClose = drawer.getByRole("button", { name: "Close", exact: true });
+  expect(await drawerClose.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  })).toBe(true);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+
+  await page.keyboard.press("Control+k");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(palette).toBeVisible();
+  expect(await palette.evaluate((el) => getComputedStyle(el).transform)).toBe("none");
+  const paletteClose = palette.getByRole("button", { name: "Close", exact: true });
+  expect(await paletteClose.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  })).toBe(true);
+  await page.keyboard.press("Escape");
+
+  await page.goto("/#/assessments");
+  await page.getByRole("button", { name: "New assessment" }).first().click();
+  const modal = page.getByRole("dialog", { name: "New assessment" });
+  await expect(modal).toBeVisible();
+  expect(await modal.evaluate((el) => getComputedStyle(el).transform)).toBe("none");
+});

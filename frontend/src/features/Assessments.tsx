@@ -176,26 +176,28 @@ function AssessmentList({
               />
             ) : (
               <Panel>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Assessment</th>
-                      <th scope="col">Endpoint</th>
-                      <th scope="col">Scanners</th>
-                      <th scope="col">Requested</th>
-                      <th scope="col">State</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((item) => (
-                      <AssessmentRow
-                        key={item.assessment_id}
-                        assessment={item}
-                        onOpen={() => navigate("assessments", item.assessment_id)}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Assessment</th>
+                        <th scope="col">Endpoint</th>
+                        <th scope="col">Scanners</th>
+                        <th scope="col">Requested</th>
+                        <th scope="col">State</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((item) => (
+                        <AssessmentRow
+                          key={item.assessment_id}
+                          assessment={item}
+                          onOpen={() => navigate("assessments", item.assessment_id)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </Panel>
             )
           }
@@ -383,7 +385,7 @@ function QueuedEndpoint({ organizationId, endpointId, onOpen }: {
   );
   usePolling(presence.reload, 6_000, true);
   return (
-    <>
+    <div className="queued-callout">
       <p>Waiting for the endpoint agent to pick up this assessment.</p>
       {presence.data && !presence.error && (
         <p>Endpoint status · {presence.data.state}. Last seen · {presence.data.last_seen_at
@@ -391,7 +393,7 @@ function QueuedEndpoint({ organizationId, endpointId, onOpen }: {
       )}
       {presence.error && <p>Endpoint presence is currently unavailable.</p>}
       <button type="button" className="link" onClick={onOpen}>View endpoint</button>
-    </>
+    </div>
   );
 }
 

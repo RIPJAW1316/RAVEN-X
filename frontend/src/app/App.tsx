@@ -5,7 +5,7 @@
  * Organization context is required by every tenant route, so the shell will
  * not render a feature screen until an organization is selected.
  */
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion, useReducedMotion } from "framer-motion";
 import {
   Activity,
   CalendarClock,
@@ -29,6 +29,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { ApiError, session } from "../api/client";
 import { auth } from "../api/endpoints";
 import { Empty, ErrorState, SelectionHighlight, Toast } from "../components/ui";
@@ -36,6 +37,7 @@ import { useApi } from "../hooks/useApi";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { buildHref, useRoute } from "../hooks/useRoute";
 import { hostedDemo } from "../lib/hostedDemo";
+import { pageVariants, paletteVariants, SCRIM_TRANSITION } from "../lib/motion";
 import { Activity as ActivityPage } from "../features/Activity";
 import { Assessments } from "../features/Assessments";
 import { CommandCenter } from "../features/CommandCenter";
@@ -109,8 +111,15 @@ export function App() {
 
   useEffect(() => session.subscribe((token) => setAuthenticated(Boolean(token))), []);
 
-  if (!hostedDemo && !authenticated) return <Login onSuccess={() => setAuthenticated(true)} />;
-  return <Workspace onSignOut={() => setAuthenticated(false)} />;
+  return (
+    <MotionConfig reducedMotion="user">
+      {!hostedDemo && !authenticated ? (
+        <Login onSuccess={() => setAuthenticated(true)} />
+      ) : (
+        <Workspace onSignOut={() => setAuthenticated(false)} />
+      )}
+    </MotionConfig>
+  );
 }
 
 /* ------------------------------------------------------------------ login */
@@ -150,8 +159,13 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
     <div className="login">
       <div className="login-topology" aria-hidden="true" />
       <form onSubmit={submit} className="login-card">
-        <div className="wordmark">
-          RAVEN<span>-X</span>
+        <div className="login-brand">
+          <span className="brand-mark" aria-hidden="true">
+            <Feather size={18} strokeWidth={1.8} />
+          </span>
+          <div className="wordmark">
+            RAVEN<span>-X</span>
+          </div>
         </div>
         <p className="eyebrow">Community Edition · Local security operations</p>
         <h1>Sign in to your workspace</h1>
@@ -276,10 +290,10 @@ function Workspace({ onSignOut }: { onSignOut: () => void }) {
             className="page"
             id="main-content"
             tabIndex={-1}
-            initial={reduced ? false : { opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduced ? undefined : { opacity: 0, y: -6 }}
-            transition={{ duration: 0.18 }}
+            variants={pageVariants(reduced)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
           >
             {hostedDemo && (
               <p className="panel-note">
@@ -390,7 +404,7 @@ function Sidebar({ active, navigate }: { active: string; navigate: (section: str
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
-          <Feather size={22} strokeWidth={1.7} />
+          <Feather size={18} strokeWidth={1.8} />
         </span>
         <span>
           RAVEN<span>-X</span>
@@ -497,6 +511,7 @@ function CommandPalette({
   onChoose: (section: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const reduced = useReducedMotion();
   const dialogRef = useDialogFocus<HTMLDivElement>(open, onClose);
 
   useEffect(() => {
@@ -509,7 +524,7 @@ function CommandPalette({
     return ALL_ITEMS.filter((item) => item.label.toLowerCase().includes(needle));
   }, [query]);
 
-  return (
+  const content = (
     <AnimatePresence>
       {open && (
         <motion.div
@@ -517,6 +532,7 @@ function CommandPalette({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={SCRIM_TRANSITION}
           onMouseDown={onClose}
         >
           <motion.div
@@ -526,9 +542,10 @@ function CommandPalette({
             role="dialog"
             aria-modal="true"
             aria-label="Command palette"
-            initial={{ scale: 0.98, y: -8 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.98, opacity: 0 }}
+            variants={paletteVariants(reduced)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="palette-input">
@@ -538,6 +555,7 @@ function CommandPalette({
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search screens"
                 aria-label="Search screens"
+                autoComplete="off"
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && matches[0]) onChoose(matches[0].id);
                 }}
@@ -564,4 +582,7 @@ function CommandPalette({
       )}
     </AnimatePresence>
   );
+
+  if (typeof document === "undefined") return content;
+  return createPortal(content, document.body);
 }

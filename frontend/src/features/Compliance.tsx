@@ -4,7 +4,7 @@
  * UNKNOWN is preserved as a first-class state throughout. The backend never
  * treats missing evidence as compliant and neither does this screen.
  */
-import { Camera, ClipboardCheck, ShieldCheck } from "lucide-react";
+import { Camera, ClipboardCheck, Server, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { compliance, fleet } from "../api/endpoints";
 import { Donut, Meter } from "../components/charts";
@@ -293,16 +293,18 @@ function MachineEvaluations({ organizationId, frameworkId, controls, navigate }:
   const items = machines.data?.items.filter((machine) => machine.lifecycle_status !== "revoked") ?? [];
   const endpointId = (items.find((machine) => machine.endpoint_id === chosen) ?? items[0])?.endpoint_id;
   return (
-    <Panel title="Machine evaluations">
+    <Panel title="Machine evaluations" icon={<Server size={15} aria-hidden="true" />}>
       <AsyncSection loading={machines.loading} data={machines.data} error={machines.error} onRetry={machines.reload}>
         {(data) => endpointId ? <>
-          <Field label="Machine">
-            <select value={endpointId} onChange={(event) => setChosen(event.target.value)}>
-              {items.map((machine) => (
-                <option key={machine.endpoint_id} value={machine.endpoint_id}>{machine.hostname}</option>
-              ))}
-            </select>
-          </Field>
+          <div className="field-compact">
+            <Field label="Machine">
+              <select value={endpointId} onChange={(event) => setChosen(event.target.value)}>
+                {items.map((machine) => (
+                  <option key={machine.endpoint_id} value={machine.endpoint_id}>{machine.hostname}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
           {data.total > data.items.length && <p className="panel-note">Showing the first {data.items.length} fleet records.</p>}
           <MachineControlRows key={endpointId} organizationId={organizationId} frameworkId={frameworkId}
             endpointId={endpointId} controls={controls} navigate={navigate} />

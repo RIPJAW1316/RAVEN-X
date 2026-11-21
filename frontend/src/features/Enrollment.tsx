@@ -57,16 +57,16 @@ export function Enrollment({ organizationId, navigate }: {
       description="Bring a Windows machine into your fleet, then verify its identity before granting assessment access."
       actions={<button type="button" className="primary" onClick={() => { issue.reset(); setIssueOpen(true); }}><Plus size={16} /> Issue token</button>} />
     <div className="onboarding-steps" role="group" aria-label="Enrollment steps">
-      <div><KeyRound size={21} /><span><strong>01 · Issue</strong><small>One machine. One short-lived token.</small></span></div>
-      <div><Laptop size={21} /><span><strong>02 · Connect</strong><small>Agent verifies your server certificate.</small></span></div>
-      <div><ShieldCheck size={21} /><span><strong>03 · Approve</strong><small>Confirm the machine, then permit scans.</small></span></div>
+      <div><span className="step-icon" aria-hidden="true"><KeyRound size={17} strokeWidth={1.85} /></span><span><strong>01 · Issue</strong><small>One machine. One short-lived token.</small></span></div>
+      <div><span className="step-icon" aria-hidden="true"><Laptop size={17} strokeWidth={1.85} /></span><span><strong>02 · Connect</strong><small>Agent verifies your server certificate.</small></span></div>
+      <div><span className="step-icon" aria-hidden="true"><ShieldCheck size={17} strokeWidth={1.85} /></span><span><strong>03 · Approve</strong><small>Confirm the machine, then permit scans.</small></span></div>
     </div>
 
     <Panel title="Awaiting your approval" icon={<ShieldCheck size={15} />}>
       <AsyncSection loading={pending.loading} error={pending.error} data={pending.data} onRetry={pending.reload}>
         {(data) => data.items.length === 0 ? <Empty title="No machines awaiting approval"
           detail="An agent appears here after redeeming its token. Registration permits heartbeat only; approval permits assessment work." /> :
-          <div className="table-scroll"><table className="data-table"><thead><tr><th>Machine</th><th>Platform</th><th>Connection</th><th>Trust decision</th></tr></thead>
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>Machine</th><th>Platform</th><th>Connection</th><th className="align-right">Trust decision</th></tr></thead>
             <tbody>{data.items.map((endpoint) => <tr key={endpoint.endpoint_id}>
               <td><button type="button" className="link" onClick={() => navigate("fleet", endpoint.endpoint_id)}>{endpoint.hostname}</button><small className="block mono">{shortId(endpoint.endpoint_id)}</small></td>
               <td>{endpoint.platform} {endpoint.platform_version}</td><td><Badge tone={endpoint.presence_state === "online" ? "ok" : "neutral"}>{endpoint.presence_state}</Badge></td>
@@ -82,7 +82,7 @@ export function Enrollment({ organizationId, navigate }: {
       </p>}
       <AsyncSection loading={tokens.loading} error={tokens.error} data={tokens.data} onRetry={tokens.reload}
         empty={<Empty title="No enrollment tokens" detail="Issue a token for the Dell or HP notebook. The secret is displayed once and expires automatically." />}>
-        {(items) => <div className="table-scroll"><table className="data-table"><thead><tr><th>Label / ID</th><th>Status</th><th>Expires</th><th>Action</th></tr></thead>
+        {(items) => <div className="table-scroll"><table className="data-table"><thead><tr><th>Label / ID</th><th>Status</th><th>Expires</th><th className="align-right">Action</th></tr></thead>
           <tbody>{items.map((token) => <tr key={token.enrollment_id}>
             <td>{token.label || "Windows endpoint"}<small className="block mono">{shortId(token.enrollment_id)}</small></td>
             <td><Badge tone={token.status === "pending" ? "warn" : "neutral"}>{token.status}</Badge></td>
@@ -112,12 +112,14 @@ export function Enrollment({ organizationId, navigate }: {
         <Field label="Enrollment ID"><input className="mono" readOnly value={issued.enrollment_id} /></Field>
         <Field label="One-time token"><textarea className="mono secret-value" readOnly rows={3} value={issued.enrollment_token} autoComplete="off" spellCheck={false} /></Field>
         <p className="panel-note">Expires {formatDateTime(issued.expires_at)}. Use the verified CA certificate and the server’s HTTPS address from the deployment runbook. Verify the hostname on the physical machine before approving it.</p>
-        <button type="button" className="primary" onClick={() => setIssued(null)}><Check size={15} /> I have saved the token</button>
+        <div className="modal-actions">
+          <button type="button" className="primary" onClick={() => setIssued(null)}><Check size={15} /> I have saved the token</button>
+        </div>
       </div>}
     </Modal>
     <Confirm open={revoking !== null} title="Revoke this token?" message="This prevents further registration with the unused token. Already enrolled machines are unaffected." confirmLabel="Revoke token" destructive busy={revoke.busy} onConfirm={revokeSelected} onCancel={() => { if (!revoke.busy) setRevoking(null); }} />
     <Modal open={renewing !== null} title="Renew expired enrollment token" onClose={() => { if (!renew.busy) setRenewing(null); }}>
-      <p>The saved token and enrollment ID will work again for 30 minutes. Renew only if the token is still private. If it may have been shared, revoke it and issue a new one.</p>
+      <p className="confirm-message">The saved token and enrollment ID will work again for 30 minutes. Renew only if the token is still private. If it may have been shared, revoke it and issue a new one.</p>
       {renew.error && <ErrorState error={renew.error} />}
       <div className="modal-actions">
         <button type="button" className="ghost" disabled={renew.busy} onClick={() => setRenewing(null)}>Cancel</button>

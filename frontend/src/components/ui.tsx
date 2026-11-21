@@ -16,7 +16,8 @@ import {
   X,
 } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { useEffect, useId } from "react";
+import { useId } from "react";
+import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import {
@@ -24,6 +25,13 @@ import {
   SEVERITY_LABEL,
   type Tone,
 } from "../lib/domain";
+import {
+  drawerVariants,
+  modalVariants,
+  SCRIM_TRANSITION,
+  SPRING_PILL,
+  toastVariants,
+} from "../lib/motion";
 import type { Severity } from "../types/api";
 
 /* ----------------------------------------------------------------- panels */
@@ -308,8 +316,9 @@ export function Drawer({
   width?: number;
 }) {
   const dialogRef = useDialogFocus<HTMLElement>(open, onClose);
+  const reduced = useReducedMotion();
 
-  return (
+  const overlay = (
     <AnimatePresence>
       {open && (
         <motion.div
@@ -317,6 +326,7 @@ export function Drawer({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={SCRIM_TRANSITION}
           onMouseDown={onClose}
         >
           <motion.aside
@@ -327,10 +337,10 @@ export function Drawer({
             role="dialog"
             aria-modal="true"
             aria-label={title}
-            initial={{ x: 40, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: 40, opacity: 0 }}
-            transition={{ duration: 0.18 }}
+            variants={drawerVariants(reduced)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header className="drawer-head">
@@ -345,6 +355,8 @@ export function Drawer({
       )}
     </AnimatePresence>
   );
+
+  return typeof document === "undefined" ? overlay : createPortal(overlay, document.body);
 }
 
 export function Modal({
@@ -359,8 +371,9 @@ export function Modal({
   children: ReactNode;
 }) {
   const dialogRef = useDialogFocus<HTMLDivElement>(open, onClose);
+  const reduced = useReducedMotion();
 
-  return (
+  const overlay = (
     <AnimatePresence>
       {open && (
         <motion.div
@@ -368,6 +381,7 @@ export function Modal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={SCRIM_TRANSITION}
           onMouseDown={onClose}
         >
           <motion.div
@@ -377,10 +391,10 @@ export function Modal({
             role="dialog"
             aria-modal="true"
             aria-label={title}
-            initial={{ scale: 0.97, y: -6, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.98, opacity: 0 }}
-            transition={{ duration: 0.16 }}
+            variants={modalVariants(reduced)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header className="drawer-head">
@@ -395,6 +409,8 @@ export function Modal({
       )}
     </AnimatePresence>
   );
+
+  return typeof document === "undefined" ? overlay : createPortal(overlay, document.body);
 }
 
 /* ------------------------------------------------------------------- misc */
@@ -406,17 +422,16 @@ export function Toast({
   error: ApiError;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const timer = window.setTimeout(onClose, 8000);
-    return () => window.clearTimeout(timer);
-  }, [onClose]);
-  return (
+  const reduced = useReducedMotion();
+
+  const node = (
     <motion.div
       className="toast"
       role="alert"
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 12 }}
+      variants={toastVariants(reduced)}
+      initial="initial"
+      animate="animate"
+      exit="exit"
     >
       <AlertTriangle size={17} aria-hidden="true" />
       <div>
@@ -435,6 +450,8 @@ export function Toast({
       </button>
     </motion.div>
   );
+
+  return typeof document === "undefined" ? node : createPortal(node, document.body);
 }
 
 export function SelectionHighlight({ group }: { group: string }) {
@@ -446,7 +463,7 @@ export function SelectionHighlight({ group }: { group: string }) {
       className="selection-highlight"
       layoutId={group}
       initial={false}
-      transition={{ type: "spring", stiffness: 520, damping: 39 }}
+      transition={SPRING_PILL}
     />
   );
 }

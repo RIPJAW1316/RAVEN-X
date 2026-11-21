@@ -169,57 +169,59 @@ function FleetList({
               />
             ) : (
               <>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <SortHeader
-                        field="hostname"
-                        label="Endpoint"
-                        sort={sort}
-                        direction={direction}
-                        onSort={toggleSort}
-                      />
-                      <SortHeader
-                        field="platform"
-                        label="Platform"
-                        sort={sort}
-                        direction={direction}
-                        onSort={toggleSort}
-                      />
-                      <SortHeader
-                        field="agent_version"
-                        label="Agent"
-                        sort={sort}
-                        direction={direction}
-                        onSort={toggleSort}
-                      />
-                      <SortHeader
-                        field="last_seen"
-                        label="Last seen"
-                        sort={sort}
-                        direction={direction}
-                        onSort={toggleSort}
-                      />
-                      <th scope="col">Presence</th>
-                      <SortHeader
-                        field="status"
-                        label="Lifecycle"
-                        sort={sort}
-                        direction={direction}
-                        onSort={toggleSort}
-                      />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.items.map((endpoint) => (
-                      <EndpointRow
-                        key={endpoint.endpoint_id}
-                        endpoint={endpoint}
-                        onOpen={() => navigate("fleet", endpoint.endpoint_id)}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <SortHeader
+                          field="hostname"
+                          label="Endpoint"
+                          sort={sort}
+                          direction={direction}
+                          onSort={toggleSort}
+                        />
+                        <SortHeader
+                          field="platform"
+                          label="Platform"
+                          sort={sort}
+                          direction={direction}
+                          onSort={toggleSort}
+                        />
+                        <SortHeader
+                          field="agent_version"
+                          label="Agent"
+                          sort={sort}
+                          direction={direction}
+                          onSort={toggleSort}
+                        />
+                        <SortHeader
+                          field="last_seen"
+                          label="Last seen"
+                          sort={sort}
+                          direction={direction}
+                          onSort={toggleSort}
+                        />
+                        <th scope="col">Presence</th>
+                        <SortHeader
+                          field="status"
+                          label="Lifecycle"
+                          sort={sort}
+                          direction={direction}
+                          onSort={toggleSort}
+                        />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.items.map((endpoint) => (
+                        <EndpointRow
+                          key={endpoint.endpoint_id}
+                          endpoint={endpoint}
+                          onOpen={() => navigate("fleet", endpoint.endpoint_id)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 <Pagination
                   offset={data.offset}
                   returned={data.returned}

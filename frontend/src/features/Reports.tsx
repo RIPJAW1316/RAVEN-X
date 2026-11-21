@@ -2,7 +2,7 @@
  * Current machine/fleet evidence reports and historical compliance snapshots.
  * JSON and CSV preserve stored evidence. The reviewed report supports PDF and printing.
  */
-import { Download, FileText } from "lucide-react";
+import { ArrowLeft, Download, FileText } from "lucide-react";
 import { useMemo, useState } from "react";
 import { compliance } from "../api/endpoints";
 import {
@@ -68,7 +68,11 @@ export function Reports({ organizationId, endpointId, navigate }: { organization
         description="Exportable records produced by the control plane."
       />
 
-      {endpointId && <button type="button" className="back" onClick={() => navigate("reports")}>Back to consolidated report</button>}
+      {endpointId && (
+        <button type="button" className="back" onClick={() => navigate("reports")}>
+          <ArrowLeft size={15} aria-hidden="true" /> Back to consolidated report
+        </button>
+      )}
       <FleetReport key={`${organizationId}:${endpointId ?? "fleet"}`} organizationId={organizationId} endpointId={endpointId} navigate={navigate} />
 
       <Panel title="Compliance snapshot exports" icon={<FileText size={15} aria-hidden="true" />}>
@@ -100,52 +104,54 @@ export function Reports({ organizationId, endpointId, navigate }: { organization
             ) : (
               <>
                 {download.error && <ErrorState error={download.error} />}
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Snapshot</th>
-                      <th scope="col">Captured</th>
-                      <th scope="col">Posture</th>
-                      <th scope="col">Export</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((snapshot, index) => {
-                      const id = String(snapshot.snapshot_id ?? index);
-                      const at = snapshot.captured_at ?? snapshot.created_at ?? null;
-                      return (
-                        <tr key={id}>
-                          <td className="mono">{id.slice(0, 12)}</td>
-                          <td>{formatDateTime(at)}</td>
-                          <td>
-                            <span className="snapshot-counts inline">
-                              <b className="tone-ok">{snapshot.compliant ?? "—"} compliant</b>
-                              <b className="tone-critical">{snapshot.non_compliant ?? "—"} non-compliant</b>
-                              <b className="tone-warn">{snapshot.unknown ?? "—"} unknown</b>
-                            </span>
-                          </td>
-                          <td className="row-actions">
-                            {(["json", "csv"] as const).map((format) => (
-                              <button
-                                key={format}
-                                type="button"
-                                className="ghost small"
-                                disabled={download.busy && busyId === `${id}-${format}`}
-                                onClick={async () => {
-                                  setBusyId(`${id}-${format}`);
-                                  await download.run(id, format);
-                                  setBusyId(null);
-                                }}
-                              >
-                                <Download size={13} aria-hidden="true" /> {format.toUpperCase()}
-                              </button>
-                            ))}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Snapshot</th>
+                        <th scope="col">Captured</th>
+                        <th scope="col">Posture</th>
+                        <th scope="col">Export</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((snapshot, index) => {
+                        const id = String(snapshot.snapshot_id ?? index);
+                        const at = snapshot.captured_at ?? snapshot.created_at ?? null;
+                        return (
+                          <tr key={id}>
+                            <td className="mono">{id.slice(0, 12)}</td>
+                            <td>{formatDateTime(at)}</td>
+                            <td>
+                              <span className="snapshot-counts inline">
+                                <b className="tone-ok">{snapshot.compliant ?? "—"} compliant</b>
+                                <b className="tone-critical">{snapshot.non_compliant ?? "—"} non-compliant</b>
+                                <b className="tone-warn">{snapshot.unknown ?? "—"} unknown</b>
+                              </span>
+                            </td>
+                            <td className="row-actions">
+                              {(["json", "csv"] as const).map((format) => (
+                                <button
+                                  key={format}
+                                  type="button"
+                                  className="ghost small"
+                                  disabled={download.busy && busyId === `${id}-${format}`}
+                                  onClick={async () => {
+                                    setBusyId(`${id}-${format}`);
+                                    await download.run(id, format);
+                                    setBusyId(null);
+                                  }}
+                                >
+                                  <Download size={13} aria-hidden="true" /> {format.toUpperCase()}
+                                </button>
+                              ))}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
                 <p className="panel-note">
                   Exports are served by the control plane with <code>Cache-Control: no-store</code>.
                   Snapshots are immutable, so an export always reflects posture at capture time.

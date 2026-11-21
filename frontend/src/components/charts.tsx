@@ -67,7 +67,7 @@ export interface DonutSlice {
 export function Donut({
   slices,
   size = 148,
-  thickness = 14,
+  thickness = 13,
   centerLabel,
   centerValue,
 }: {
@@ -190,12 +190,20 @@ export function Sparkline({
     >
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={tone} stopOpacity="0.28" />
+          <stop offset="0%" stopColor={tone} stopOpacity="0.22" />
           <stop offset="100%" stopColor={tone} stopOpacity="0" />
         </linearGradient>
       </defs>
       <path d={area} fill={`url(#${gradientId})`} />
-      <path d={line} fill="none" stroke={tone} strokeWidth="1.6" strokeLinejoin="round" />
+      <path
+        d={line}
+        fill="none"
+        stroke={tone}
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   );
 }

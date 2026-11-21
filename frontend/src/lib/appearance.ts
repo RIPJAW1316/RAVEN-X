@@ -1,6 +1,16 @@
 export type Theme = "dark" | "light";
 
 const storageKey = "ravenx.appearance";
+const THEME_META_COLOR: Record<Theme, string> = {
+  dark: "#0d1014",
+  light: "#f6f7f9",
+};
+
+function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (meta) meta.content = THEME_META_COLOR[theme];
+}
 
 export function initializeTheme() {
   let theme: Theme = "dark";
@@ -9,11 +19,11 @@ export function initializeTheme() {
   } catch {
     // Storage may be disabled in a private browser.
   }
-  document.documentElement.dataset.theme = theme;
+  applyTheme(theme);
 }
 
 export function setTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme;
+  applyTheme(theme);
   try {
     localStorage.setItem(storageKey, theme);
   } catch {

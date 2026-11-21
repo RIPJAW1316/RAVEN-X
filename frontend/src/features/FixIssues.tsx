@@ -41,64 +41,70 @@ export function FixIssues({ organizationId, navigate }: {
     <PageHeading eyebrow="Remediation" title="Fix Issues" description="Review assessment evidence, plan changes, and verify them with a fresh scan."
       actions={<button type="button" className="ghost" onClick={plan.reload}>Refresh</button>} />
     <Panel title="Remediation plan" icon={<Wrench size={15} aria-hidden="true" />}>
-      <Field label="Endpoint scope">
-        <select value={endpointId} onChange={(event) => { setEndpointId(event.target.value); setPage(0); }}>
-          <option value="">Fleet</option>
-          {fleet.data?.endpoints.map((row) => (
-            <option key={row.endpoint_id} value={row.endpoint_id}>{row.hostname}</option>
-          ))}
-        </select>
-      </Field>
+      <div className="field-compact">
+        <Field label="Endpoint scope">
+          <select value={endpointId} onChange={(event) => { setEndpointId(event.target.value); setPage(0); }}>
+            <option value="">Fleet</option>
+            {fleet.data?.endpoints.map((row) => (
+              <option key={row.endpoint_id} value={row.endpoint_id}>{row.hostname}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
       <AsyncSection loading={plan.loading || (!scopedData && !plan.error)}
         data={scopedData} error={plan.error} onRetry={plan.reload}>
         {(data) => <>
-          <div className="row-actions">
-            <span>{data.items.length} finding{data.items.length === 1 ? "" : "s"} for review</span>
-            <button type="button" className="ghost small"
-              onClick={() => downloadText("ravenx-fix-plan.md", data.analysis)}>
-              <FileDown size={14} aria-hidden="true" /> Export Markdown
-            </button>
-            <button type="button" className="ghost small"
-              onClick={() => downloadText("ravenx-fix-plan.html", fixPlanHtml(data), "text/html;charset=utf-8")}>
-              <FileDown size={14} aria-hidden="true" /> Export HTML
-            </button>
+          <div className="fix-toolbar">
+            <span className="fix-count">{data.items.length} finding{data.items.length === 1 ? "" : "s"} for review</span>
+            <div className="row-actions">
+              <button type="button" className="ghost small"
+                onClick={() => downloadText("ravenx-fix-plan.md", data.analysis)}>
+                <FileDown size={14} aria-hidden="true" /> Export Markdown
+              </button>
+              <button type="button" className="ghost small"
+                onClick={() => downloadText("ravenx-fix-plan.html", fixPlanHtml(data), "text/html;charset=utf-8")}>
+                <FileDown size={14} aria-hidden="true" /> Export HTML
+              </button>
+            </div>
           </div>
           {data.findings_omitted > 0 &&
             <p className="panel-note">{data.findings_omitted} findings exceeded the report limit. Open the source assessments for the remaining evidence.</p>}
           {data.items.length === 0 ? <Empty compact title="No findings available for review"
             detail="Run an assessment to collect evidence for this scope." /> :
-            <ul className="finding-list detailed">
+            <ul className="fix-list">
               {data.items.slice(activePage * FINDINGS_PER_PAGE, (activePage + 1) * FINDINGS_PER_PAGE).map((finding) => {
                 const script = localFixScript(finding);
                 return <li key={finding.finding_key}>
-                  <details className="drawer-section">
-                    <summary>
+                  <details className="fix-item">
+                    <summary className="fix-summary">
                       <SeverityBadge severity={normalizeSeverity(finding.severity)} />{" "}
                       <strong>{finding.title}</strong> · {finding.hostname}
                     </summary>
-                    <p>{finding.details}</p>
-                    <h3>Recommended action</h3>
-                    <p>{finding.action}</p>
-                    <p className="panel-note">{finding.rationale}</p>
-                    <div className="row-actions">
-                      <button type="button" className="link"
-                        onClick={() => navigate("assessments", finding.assessment_id)}>Source assessment</button>
-                      {script && <button type="button" className="ghost small"
-                        onClick={() => downloadText(script.filename, script.text)}>Download PowerShell</button>}
+                    <div className="fix-body">
+                      <p>{finding.details}</p>
+                      <h3>Recommended action</h3>
+                      <p>{finding.action}</p>
+                      <p className="panel-note">{finding.rationale}</p>
+                      <div className="row-actions">
+                        <button type="button" className="link"
+                          onClick={() => navigate("assessments", finding.assessment_id)}>Source assessment</button>
+                        {script && <button type="button" className="ghost small"
+                          onClick={() => downloadText(script.filename, script.text)}>Download PowerShell</button>}
+                      </div>
+                      {script && <p className="panel-note">Run locally in preview mode first. Applying the change requires administrator access and confirmation.</p>}
                     </div>
-                    {script && <p className="panel-note">Run locally in preview mode first. Applying the change requires administrator access and confirmation.</p>}
                   </details>
                 </li>;
               })}
             </ul>}
-          {lastPage > 0 && <div className="row-actions" aria-label="Fix plan pages">
+          {lastPage > 0 && <div className="row-actions fix-pagination" aria-label="Fix plan pages">
             <button type="button" className="ghost small" disabled={activePage === 0}
               onClick={() => setPage(activePage - 1)}>Previous</button>
             <span aria-live="polite">Page {activePage + 1} of {lastPage + 1}</span>
             <button type="button" className="ghost small" disabled={activePage === lastPage}
               onClick={() => setPage(activePage + 1)}>Next</button>
           </div>}
-          {data.unverified_checks.length > 0 && <details className="drawer-section">
+          {data.unverified_checks.length > 0 && <details className="fix-followup">
             <summary>{data.unverified_checks.length} requested checks need follow-up</summary>
             <ul className="finding-list">
               {data.unverified_checks.slice(0, FINDINGS_PER_PAGE).map((check) => <li key={`${check.assessment_id}:${check.scanner_id}`}>

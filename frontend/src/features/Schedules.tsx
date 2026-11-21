@@ -124,92 +124,94 @@ export function Schedules({
       >
         {(items) => (
           <Panel>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">Schedule</th>
-                  <th scope="col">Cadence</th>
-                  <th scope="col">Target</th>
-                  <th scope="col">Next run</th>
-                  <th scope="col">Last run</th>
-                  <th scope="col">Status</th>
-                  <th scope="col"><span className="sr-only">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((schedule) => (
-                  <tr key={schedule.schedule_id}>
-                    <td>
-                      <button
-                        type="button"
-                        className="link strong"
-                        onClick={() => navigate("schedules", schedule.schedule_id)}
-                      >
-                        {schedule.name}
-                      </button>
-                      <small className="chip-row tight">
-                        {schedule.scanner_ids.slice(0, 2).map((id) => (
-                          <span className="chip static" key={id}>
-                            {scannerName(id)}
-                          </span>
-                        ))}
-                        {schedule.scanner_ids.length > 2 && (
-                          <span className="chip static">+{schedule.scanner_ids.length - 2}</span>
-                        )}
-                      </small>
-                    </td>
-                    <td>{describeRecurrence(schedule)}</td>
-                    <td>{describeTarget(schedule)}</td>
-                    <td title={formatDateTime(schedule.next_run_at)}>
-                      {schedule.status === "active" ? formatRelative(schedule.next_run_at) : DASH}
-                    </td>
-                    <td title={formatDateTime(schedule.last_run_at)}>
-                      {formatRelative(schedule.last_run_at)}
-                    </td>
-                    <td>
-                      <StatusBadge
-                        tone={statusTone(schedule.status)}
-                        label={titleCase(schedule.status)}
-                      />
-                    </td>
-                    <td className="row-actions">
-                      {schedule.status === "active" && (
-                        <button
-                          type="button"
-                          className="icon-button"
-                          aria-label={`Pause ${schedule.name}`}
-                          disabled={pause.busy}
-                          onClick={() => act(pause, schedule.schedule_id)}
-                        >
-                          <Pause size={15} />
-                        </button>
-                      )}
-                      {schedule.status === "paused" && (
-                        <button
-                          type="button"
-                          className="icon-button"
-                          aria-label={`Resume ${schedule.name}`}
-                          disabled={resume.busy}
-                          onClick={() => act(resume, schedule.schedule_id)}
-                        >
-                          <Play size={15} />
-                        </button>
-                      )}
-                      {schedule.status !== "revoked" && (
-                        <button
-                          type="button"
-                          className="icon-button danger-ghost"
-                          aria-label={`Revoke ${schedule.name}`}
-                          onClick={() => setPendingRevoke(schedule)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </td>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Schedule</th>
+                    <th scope="col">Cadence</th>
+                    <th scope="col">Target</th>
+                    <th scope="col">Next run</th>
+                    <th scope="col">Last run</th>
+                    <th scope="col">Status</th>
+                    <th scope="col"><span className="sr-only">Actions</span></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.map((schedule) => (
+                    <tr key={schedule.schedule_id}>
+                      <td>
+                        <button
+                          type="button"
+                          className="link strong"
+                          onClick={() => navigate("schedules", schedule.schedule_id)}
+                        >
+                          {schedule.name}
+                        </button>
+                        <small className="chip-row tight">
+                          {schedule.scanner_ids.slice(0, 2).map((id) => (
+                            <span className="chip static" key={id}>
+                              {scannerName(id)}
+                            </span>
+                          ))}
+                          {schedule.scanner_ids.length > 2 && (
+                            <span className="chip static">+{schedule.scanner_ids.length - 2}</span>
+                          )}
+                        </small>
+                      </td>
+                      <td>{describeRecurrence(schedule)}</td>
+                      <td>{describeTarget(schedule)}</td>
+                      <td title={formatDateTime(schedule.next_run_at)}>
+                        {schedule.status === "active" ? formatRelative(schedule.next_run_at) : DASH}
+                      </td>
+                      <td title={formatDateTime(schedule.last_run_at)}>
+                        {formatRelative(schedule.last_run_at)}
+                      </td>
+                      <td>
+                        <StatusBadge
+                          tone={statusTone(schedule.status)}
+                          label={titleCase(schedule.status)}
+                        />
+                      </td>
+                      <td className="row-actions">
+                        {schedule.status === "active" && (
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label={`Pause ${schedule.name}`}
+                            disabled={pause.busy}
+                            onClick={() => act(pause, schedule.schedule_id)}
+                          >
+                            <Pause size={15} />
+                          </button>
+                        )}
+                        {schedule.status === "paused" && (
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label={`Resume ${schedule.name}`}
+                            disabled={resume.busy}
+                            onClick={() => act(resume, schedule.schedule_id)}
+                          >
+                            <Play size={15} />
+                          </button>
+                        )}
+                        {schedule.status !== "revoked" && (
+                          <button
+                            type="button"
+                            className="icon-button danger-ghost"
+                            aria-label={`Revoke ${schedule.name}`}
+                            onClick={() => setPendingRevoke(schedule)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Panel>
         )}
       </AsyncSection>

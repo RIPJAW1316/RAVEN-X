@@ -143,52 +143,54 @@ export function Settings({ organizationId }: { organizationId: string }) {
           }
         >
           {(items) => (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">User</th>
-                  <th scope="col">Membership</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Added</th>
-                  <th scope="col"><span className="sr-only">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((membership) => (
-                  <tr key={membership.membership_id}>
-                    <td className="mono">{membership.user_id}</td>
-                    <td className="mono">{membership.membership_id.slice(0, 8)}</td>
-                    <td>
-                      <Badge tone={membership.status === "active" ? "ok" : "neutral"}>
-                        {titleCase(membership.status)}
-                      </Badge>
-                    </td>
-                    <td>{formatDateTime(membership.created_at)}</td>
-                    <td className="row-actions">
-                      {membership.status === "active" && (
-                        <button
-                          type="button"
-                          className="ghost small"
-                          onClick={() => setPending({ membership, action: "suspend" })}
-                        >
-                          Suspend
-                        </button>
-                      )}
-                      {membership.status !== "revoked" && (
-                        <button
-                          type="button"
-                          className="icon-button danger-ghost"
-                          aria-label="Revoke membership"
-                          onClick={() => setPending({ membership, action: "revoke" })}
-                        >
-                          <UserMinus size={15} />
-                        </button>
-                      )}
-                    </td>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">User</th>
+                    <th scope="col">Membership</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Added</th>
+                    <th scope="col"><span className="sr-only">Actions</span></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.map((membership) => (
+                    <tr key={membership.membership_id}>
+                      <td className="mono">{membership.user_id}</td>
+                      <td className="mono">{membership.membership_id.slice(0, 8)}</td>
+                      <td>
+                        <Badge tone={membership.status === "active" ? "ok" : "neutral"}>
+                          {titleCase(membership.status)}
+                        </Badge>
+                      </td>
+                      <td>{formatDateTime(membership.created_at)}</td>
+                      <td className="row-actions">
+                        {membership.status === "active" && (
+                          <button
+                            type="button"
+                            className="ghost small"
+                            onClick={() => setPending({ membership, action: "suspend" })}
+                          >
+                            Suspend
+                          </button>
+                        )}
+                        {membership.status !== "revoked" && (
+                          <button
+                            type="button"
+                            className="icon-button danger-ghost"
+                            aria-label="Revoke membership"
+                            onClick={() => setPending({ membership, action: "revoke" })}
+                          >
+                            <UserMinus size={15} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </AsyncSection>
       </Panel>
@@ -203,7 +205,9 @@ export function Settings({ organizationId }: { organizationId: string }) {
 
         <Panel title="Agents & integrations" icon={<ShieldCheck size={15} aria-hidden="true" />}>
           <p className="panel-note">Issue a single-use token, review the connecting machine, and approve its identity before any assessment can run.</p>
-          <a className="ghost" href="#/enrollment">Open enrollment desk</a>
+          <div className="panel-cta">
+            <a className="ghost" href="#/enrollment">Open enrollment desk</a>
+          </div>
         </Panel>
       </section>
 

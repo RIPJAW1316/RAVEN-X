@@ -52,8 +52,8 @@ function TemplateCard({ template, active, onSelect }: {
       aria-label={template.name} aria-describedby={`${descriptionId}-count ${descriptionId}`} aria-pressed={active}
       onClick={() => onSelect(template.checks.map((check) => check.scanner_id))}>
       <span className="scan-card-top">
-        <span className="scan-icon"><Icon size={22} aria-hidden="true" /></span>
-        <span className="scan-card-count" id={`${descriptionId}-count`}>{active && <Check size={14} aria-hidden="true" />}{template.checks.length} checks</span>
+        <span className="scan-icon"><Icon size={18} strokeWidth={1.85} aria-hidden="true" /></span>
+        <span className="scan-card-count" id={`${descriptionId}-count`}>{active && <Check size={13} aria-hidden="true" />}{template.checks.length} checks</span>
       </span>
       <strong>{template.name}</strong>
       <span className="scan-card-description" id={descriptionId}>{template.description}</span>

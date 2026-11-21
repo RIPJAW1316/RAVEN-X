@@ -114,9 +114,9 @@ export function FleetReport({ organizationId, endpointId, navigate }: {
         {endpointId && data.endpoints.map((row) => <section key={row.endpoint_id} className="report-evidence">
           <h3>{row.hostname} · evidence</h3>
           <p className="panel-note">Last successful assessment: {formatDateTime(row.last_successful_assessment_at)}. {row.malformed_findings > 0 ? `${row.malformed_findings} malformed findings excluded.` : ""} {row.findings_omitted > 0 ? `${row.findings_omitted} findings omitted from this bounded report; open the assessment for full evidence.` : ""}</p>
-          {row.scanner_results.length > 0 && <table className="data-table"><thead><tr><th>Scanner</th><th>Outcome</th><th>Findings</th></tr></thead><tbody>
-            {row.scanner_results.map((scanner) => <tr key={scanner.scanner_id}><td>{scanner.scanner_id}</td><td>{scanner.status}{scanner.has_error ? " · error reported" : ""}</td><td>{scanner.finding_count}</td></tr>)}
-          </tbody></table>}
+          {row.scanner_results.length > 0 && <div className="table-scroll"><table className="data-table"><thead><tr><th>Scanner</th><th>Outcome</th><th>Findings</th></tr></thead><tbody>
+            {row.scanner_results.map((scanner) => <tr key={scanner.scanner_id}><td className="mono">{scanner.scanner_id}</td><td>{scanner.status}{scanner.has_error ? " · error reported" : ""}</td><td>{scanner.finding_count}</td></tr>)}
+          </tbody></table></div>}
           {row.findings.map((finding, index) => <article className="report-finding" key={finding.finding_id ?? index}>
             <SeverityBadge severity={normalizeSeverity(finding.severity)} /><h4>{finding.title}</h4><p>{finding.description}</p>
             {finding.evidence.map((evidence, evidenceIndex) => <dl className="evidence-values" key={evidenceIndex}>
